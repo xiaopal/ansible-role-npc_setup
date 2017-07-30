@@ -1,2 +1,8 @@
 ---
 allow_duplicates: yes
+dependencies: []
+galaxy_info:
+  author: xiaopal
+  description: npc_setup role
+  min_ansible_version: 1.2
+  galaxy_tags: []

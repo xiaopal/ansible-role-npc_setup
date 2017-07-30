@@ -8,7 +8,4 @@ npc_default_config:
     memory: 4G 
   ssh_key: 
     name: ansible
-  actions:
-    - create
-    - update
-    - destroy
+    

@@ -1,0 +1,59 @@
+---
+- name: npc setup
+  shell: npc setup
+    --init-ssh-key 
+    {% for action in npc_actions %}
+      --{{ action }}
+    {% endfor %}
+    {{ dict(
+      npc_ssh_key=npc_effective_config.ssh_key,
+      npc_instance_type=npc_effective_config.instance_type,
+      npc_instance_image=npc_effective_config.instance_image
+      ) | to_json | quote }}
+    {{ npc_instances_config | to_json | quote }}
+    {% if ((npc_setup | default({})).log | default("")) | length > 0 %}
+      2>> {{ (npc_setup | default({})).log | quote }}
+    {% endif %}
+  args:
+    executable: /bin/bash
+  environment:
+    NPC_API_ENDPOINT: "{{ npc_effective_config.api_endpoint | default('') }}"
+    NPC_API_KEY: "{{ npc_effective_config.app_key | default('') }}"
+    NPC_API_SECRET: "{{ npc_effective_config.app_secret | default('') }}"
+    NPC_ACTION_FORKS: "{{ npc_effective_config.action_focks | default('') }}"
+    NPC_ACTION_TIMEOUT: "{{ npc_effective_config.action_timeout | default('') }}"
+    NPC_ACTION_PULL_SECONDS: "{{ npc_effective_config.action_pull_interval | default('') }}"
+    NPC_ACTION_RETRY_SECONDS: "{{ npc_effective_config.action_retry_interval | default('') }}"
+  register: npc_execution
+  changed_when: false
+
+- name: export 'npc'
+  set_fact:
+    npc: "{{ npc_execution.stdout | from_json }}"
+
+- name: refresh inventory
+  meta: refresh_inventory
+  when: (npc_refresh_inventory | default(true)) and npc.instances is defined
+
+- name: add hosts
+  with_items: "{{ npc.instances | default([]) }}"
+  vars:
+      npc_group_by: '{{ ((npc_setup | default({})).group_by | default({}, true)) }}'
+      npc_change_group: '{{npc_group_by[item.change_action|default("none", true)]|default("", true)}}'
+      npc_all_group: '{{npc_group_by["all"]|default("", true)}}'
+      npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
+  add_host: 
+  args: "{{ dict(
+      hostname=item.name,
+      groups=((item.groups | default([])) + npc_groups),
+      ansible_host=item.lan_ip,
+      ansible_ssh_private_key_file=item.ssh_key_file,
+      npc_instance=item
+      ) | combine( item.vars | default({}) ) }}"
+  changed_when: false
+
+- name: summary
+  debug: 
+    msg: "{{npc.instances|length}} instances registered: {{npc.instances|map(attribute='name')|join(', ')}}"
+  when: npc.instances is defined
+  changed_when: npc.changed

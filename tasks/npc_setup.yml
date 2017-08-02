@@ -1,7 +1,12 @@
 ---
 - name: npc setup
   shell: npc setup
-    --init-ssh-key 
+    {% if (npc_setup | default({})).init_ssh_key | default(true) %}
+      --init-ssh-key 
+    {% endif %}
+    {% if (npc_setup | default({})).absent | default("destroy") == "omit" %}
+      --omit-absent
+    {% endif %}
     {% for action in npc_actions %}
       --{{ action }}
     {% endfor %}
@@ -31,29 +36,51 @@
   set_fact:
     npc: "{{ npc_execution.stdout | from_json }}"
 
-- name: refresh inventory
-  meta: refresh_inventory
-  when: (npc_refresh_inventory | default(true)) and npc.instances is defined
-
-- name: add hosts
-  with_items: "{{ npc.instances | default([]) }}"
-  vars:
-      npc_group_by: '{{ ((npc_setup | default({})).group_by | default({}, true)) }}'
-      npc_change_group: '{{npc_group_by[item.change_action|default("none", true)]|default("", true)}}'
-      npc_all_group: '{{npc_group_by["all"]|default("", true)}}'
-      npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
-  add_host: 
-  args: "{{ dict(
-      hostname=item.name,
-      groups=((item.groups | default([])) + npc_groups),
-      ansible_host=item.lan_ip,
-      ansible_ssh_private_key_file=item.ssh_key_file,
-      npc_instance=item
-      ) | combine( item.vars | default({}) ) }}"
-  changed_when: false
-
 - name: summary
   debug: 
-    msg: "{{npc.instances|length}} instances registered: {{npc.instances|map(attribute='name')|join(', ')}}"
-  when: npc.instances is defined
+    msg: npc_setup - 
+      {% if npc.changing %}
+      {{npc.creating|default([])|length}} creating, 
+      {{npc.updating|default([])|length}} updating, 
+      {{npc.destroying|default([])|length}} destroying,
+      {% else %}
+        0 changing,
+      {% endif %}
+      {% if npc.changed %}
+      {{npc.created|default([])|length}} created, 
+      {{npc.updated|default([])|length}} updated, 
+      {{npc.destroyed|default([])|length}} destroyed.
+      {% else %}
+        0 changed.
+      {% endif %}
   changed_when: npc.changed
+
+- name: register hosts
+  when:
+    - npc.instances is defined
+    - (npc_setup | default({})).add_hosts | default(true)
+  block:
+    - name: refresh inventory
+      meta: refresh_inventory
+      when: 
+        - npc_refresh_inventory | default(true)
+        - (npc_setup | default({})).refresh_inventory | default(true)
+    - name: add hosts
+      with_items: "{{ npc.instances | default([]) }}"
+      vars:
+          npc_group_by: '{{ ((npc_setup | default({})).group_by | default({}, true)) }}'
+          npc_change_group: '{{npc_group_by[item.change_action|default("none", true)]|default("", true)}}'
+          npc_all_group: '{{npc_group_by["all"]|default("", true)}}'
+          npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
+      add_host: 
+      args: "{{ dict(
+          hostname=item.name,
+          groups=((item.groups | default([])) + npc_groups),
+          ansible_host=item.lan_ip,
+          ansible_ssh_private_key_file=(item.ssh_key_file|default(omit)),
+          npc_instance=item
+          ) | combine( item.vars | default({}) ) }}"
+      changed_when: false
+    - name: summary
+      debug: 
+        msg: "{{npc.instances|length}} instances registered: {{npc.instances|map(attribute='name')|join(', ')}}"

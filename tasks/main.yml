@@ -6,6 +6,9 @@
         creates: /usr/bin/npc
     - name: copy npc-setup.sh
       copy: src=npc-setup.sh dest=/usr/npc-shell/npc-setup.sh mode=0755
+    - copy: src={{item}} dest=/usr/npc-shell/
+      with_fileglob:
+        - npc-setup.*.sh
     - set_fact:
         npc_effective_config: "{{ npc_effective_config | default(npc_default_config) | combine(npc_config|default({})) }}"
         npc_instances_config: "{{ dict(npc_instances=npc_instances|default(false)) }}"

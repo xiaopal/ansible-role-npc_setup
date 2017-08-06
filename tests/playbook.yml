@@ -46,6 +46,8 @@
       absent: omit
     npc_instances: 
       - name: 'debian-test-3'
+        groups:
+          - tests
         instance_image: Debian 8.6
         instance_type:
           cpu: 1

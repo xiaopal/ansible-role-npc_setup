@@ -3,8 +3,8 @@
 NPC_STAGE="$(pwd)/.npc-setup"
 NPC_ACTION_FORKS=${NPC_ACTION_FORKS:-5}
 NPC_ACTION_TIMEOUT=${NPC_ACTION_TIMEOUT:-5m}
-NPC_ACTION_PULL_SECONDS=${NPC_ACTION_PULL_SECONDS:-5}
-NPC_ACTION_RETRY_SECONDS=${NPC_ACTION_RETRY_SECONDS:-10}
+NPC_ACTION_PULL_SECONDS=${NPC_ACTION_PULL_SECONDS:-1}
+NPC_ACTION_RETRY_SECONDS=${NPC_ACTION_RETRY_SECONDS:-5}
 
 do_setup(){
 	local ARG INPUT='{}' ACTIONS ACTION_INIT ACTION_SUSPEND ACTION_RESUME ACTION_RESTART ACTION_INIT_SSH_KEY ACTION_OMIT_ABSENT
@@ -112,21 +112,21 @@ init(){
 
 create(){
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "$NPC_STAGE/$RESOURCE.creating" "${RESOURCE}_create" "$NPC_STAGE/$RESOURCE.created" || return 1
+		apply_actions "${RESOURCE}_create" "$NPC_STAGE/$RESOURCE.creating" "$NPC_STAGE/$RESOURCE.created" || return 1
 	done
 	return 0
 }
 
 update(){
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "$NPC_STAGE/$RESOURCE.updating" "${RESOURCE}_update" "$NPC_STAGE/$RESOURCE.updated" || return 1
+		apply_actions "${RESOURCE}_update" "$NPC_STAGE/$RESOURCE.updating" "$NPC_STAGE/$RESOURCE.updated" || return 1
 	done
 	return 0
 }
 
 destroy(){
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "$NPC_STAGE/$RESOURCE.destroying" "${RESOURCE}_destroy" "$NPC_STAGE/$RESOURCE.destroyed" || return 1
+		apply_actions "${RESOURCE}_destroy" "$NPC_STAGE/$RESOURCE.destroying" "$NPC_STAGE/$RESOURCE.destroyed" || return 1
 	done
 	return 0
 }
@@ -156,7 +156,7 @@ report(){
 			else
 				jq -c '{destroyed: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.destroyed
 			fi
-			[ -f $STAGE.omit ] && jq -c '.+{change_action:"omit"}|'"{$RESOURCE:[.]}" $STAGE.omit
+			# [ -f $STAGE.omit ] && jq -c '.+{change_action:"omit"}|'"{$RESOURCE:[.]}" $STAGE.omit
 		}
 	}
 	

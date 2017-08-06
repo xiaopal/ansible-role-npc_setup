@@ -12,8 +12,8 @@
     {% endfor %}
     {{ dict(
       npc_ssh_key=npc_effective_config.ssh_key,
-      npc_instance_type=npc_effective_config.instance_type,
-      npc_instance_image=npc_effective_config.instance_image
+      npc_instance_type=npc_effective_config.default_instance_type,
+      npc_instance_image=npc_effective_config.default_instance_image
       ) | to_json | quote }}
     {{ npc_instances_config | to_json | quote }}
     {% if ((npc_setup | default({})).log | default("")) | length > 0 %}
@@ -64,7 +64,7 @@
       meta: refresh_inventory
       when: 
         - npc_refresh_inventory | default(true)
-        - (npc_setup | default({})).refresh_inventory | default(true)
+        - (npc_setup | default({})).refresh_inventory | default(false)
     - name: add hosts
       with_items: "{{ npc.instances | default([]) }}"
       vars:
@@ -72,14 +72,33 @@
           npc_change_group: '{{npc_group_by[item.change_action|default("none", true)]|default("", true)}}'
           npc_all_group: '{{npc_group_by["all"]|default("", true)}}'
           npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
+          ssh_host_by: '{{item.ssh_host_by|default(npc_effective_config.ssh_host_by|default("lan_ip"))}}'
+          ssh_jump_host: '{{item.ssh_jump_host|default(npc_effective_config.ssh_jump_host)|default(false,true)}}'
+          ssh_jump_user: '{{item.ssh_jump_user|default(npc_effective_config.ssh_jump_user)|default(false,true)}}'
+          ssh_jump_key_file: '{{item.ssh_jump_key_file|default(npc_effective_config.ssh_jump_key_file)|default(false,true)}}'
+          ssh_jump_vars: '{{hostvars[ssh_jump_host]|default({})}}'
+          ssh_jump_args: '{% if ssh_jump_host != false %}-o ProxyCommand="ssh -W %h:%p -q 
+            {% for host in npc.instances|selectattr("name", "equalto", ssh_jump_host) %}
+              {% if ssh_jump_key_file|default(host.ssh_key_file,true)|default(false) %}
+                -i {{ ssh_jump_key_file|default(host.ssh_key_file,true) }}
+              {% endif %}
+              {% if ssh_jump_user|default(host.ssh_user,true)|default(false) %}{{ssh_jump_user|default(host.ssh_user,true)}}@{% endif %}{{host[host.ssh_host_by|default(npc_effective_config.ssh_host_by|default("lan_ip"))]}}
+            {% else %}
+              {% if ssh_jump_key_file|default(ssh_jump_vars.ansible_ssh_private_key_file,true)|default(false) %}
+                -i {{ ssh_jump_key_file|default(ssh_jump_vars.ansible_ssh_private_key_file,true) }}
+              {% endif %}
+              {% if ssh_jump_user|default(ssh_jump_vars.ansible_user,true)|default(false) %}{{ssh_jump_user|default(ssh_jump_vars.ansible_user,true)}}@{% endif %}{{ssh_jump_vars.ansible_host|default(ssh_jump_host)}}
+            {% endfor %}"{% endif %}'
       add_host: 
-      args: "{{ dict(
+      args: '{{ dict(
           hostname=item.name,
-          groups=((item.groups | default([])) + npc_groups),
-          ansible_host=item.lan_ip,
+          groups=( (npc_effective_config.groups|default([])) + (item.groups | default([])) + npc_groups ),
+          ansible_host=item[ssh_host_by],
+          ansible_user=(item.ssh_user|default(omit)),
+          ansible_ssh_common_args=((ssh_jump_host != false)|ternary(ssh_jump_args, omit) ),
           ansible_ssh_private_key_file=(item.ssh_key_file|default(omit)),
           npc_instance=item
-          ) | combine( item.vars | default({}) ) }}"
+          ) | combine( npc_effective_config.vars|default({},true), item.vars|default({},true) ) }}'
       changed_when: false
     - name: summary
       debug: 

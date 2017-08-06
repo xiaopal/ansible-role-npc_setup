@@ -4,27 +4,35 @@
   gather_facts: 'no'
   vars:
     npc_config:
-      instance_type:
-        cpu: 2
-        memory: 4G           
       ssh_key: 
         name: ansible-tests
+      default_instance_image: Debian 8.6
+      default_instance_type:
+        cpu: 2
+        memory: 4G
+      ssh_jump_host: ssh-jump-test
     npc_instances: 
+      - name: 'ssh-jump-test'
+        groups:
+          - jump
+        instance_type:
+          cpu: 1
+          memory: 2G
+        wan_ip: any
+        wan_capacity: 100m
+        ssh_host_by: wan_ip
+        ssh_jump_host: false
+
       - name: 'debian-test-{1..2}'
         groups:
           - tests
-        instance_image: Debian 8.6
-        instance_type:
-          cpu: 1
-          memory: 2G           
         vars:
           host_var1: value
+
       - name: 'ubuntu-test'
         groups:
           - tests
         instance_image: Ubuntu 16.04
-        vars:
-          host_var1: value
   roles: 
     - ../ansible-role-npc_setup
   
@@ -39,6 +47,8 @@
       absent: omit
       add_hosts: false
     npc_instances: 
+      - name: 'ssh-jump-test'
+        present: false
       - name: 'debian-test-2'
         present: false
       - name: 'debian-test-3'

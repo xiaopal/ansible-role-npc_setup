@@ -1,4 +1,5 @@
 ---
+
 # Setup npc instances
 - hosts: localhost
   gather_facts: 'no'
@@ -35,10 +36,31 @@
         instance_image: Ubuntu 16.04
   roles: 
     - ../ansible-role-npc_setup
-  
+  tasks:
+    - debug: msg={{groups["all"]}}
+
+- hosts: localhost
+  gather_facts: 'no'
+  vars:
+    npc_setup:
+      absent: omit
+    npc_instances: 
+      - name: 'debian-test-3'
+        instance_image: Debian 8.6
+        instance_type:
+          cpu: 1
+          memory: 2G           
+        present: true
+        ssh_jump_host: ssh-jump-test
+  roles: 
+    - ../ansible-role-npc_setup
+  tasks:
+    - debug: msg={{groups["all"]}}
+
 - hosts: tests
   tasks:
     - ping:
+    - setup: 
 
 - hosts: localhost
   gather_facts: 'no'

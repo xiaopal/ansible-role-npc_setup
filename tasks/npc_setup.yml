@@ -60,11 +60,6 @@
     - npc.instances is defined
     - (npc_setup | default({})).add_hosts | default(true)
   block:
-    - name: refresh inventory
-      meta: refresh_inventory
-      when: 
-        - npc_refresh_inventory | default(true)
-        - (npc_setup | default({})).refresh_inventory | default(false)
     - name: add hosts
       with_items: "{{ npc.instances | default([]) }}"
       vars:

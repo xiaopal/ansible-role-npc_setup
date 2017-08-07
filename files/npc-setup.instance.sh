@@ -148,7 +148,7 @@ instances_create(){
 			}
 		}'<<<"$INSTANCE")"
 	while true; do
-		local RESPONSE="$(npc api 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
+		local RESPONSE="$(npc api --error 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
 			&& [ ! -z "$RESPONSE" ] || return 1
 		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] && {
 			while action_check_continue "$CTX"; do

@@ -76,10 +76,6 @@
       - name: 'debian-test-2'
         present: false
       - name: 'debian-test-3'
-        instance_image: Debian 8.6
-        instance_type:
-          cpu: 1
-          memory: 2G           
-        present: true
+        present: false
   roles: 
     - ../ansible-role-npc_setup

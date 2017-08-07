@@ -13,18 +13,16 @@
       default_instance_type:
         cpu: 2
         memory: 4G
-      ssh_jump_host: debian-test-gw
     npc_instances: 
       - name: 'debian-test-gw'
         wan_ip: any
         wan_capacity: 100m
         ssh_host_by: wan_ip
-        ssh_jump_host: false
         groups:
           - gw
           - jump
-
       - name: 'debian-test-w-{a..b}'
+        ssh_jump_host: debian-test-gw
         groups:
           - worker
         vars:
@@ -46,9 +44,36 @@
         table: nat
         chain: POSTROUTING
         source: 10.173.0.0/16
+        destination: '10.173.0.0/16'
+        jump: ACCEPT
+    - iptables:
+        table: nat
+        chain: POSTROUTING
+        source: 10.173.0.0/16
         jump: SNAT
         to_source: '{{npc_instance.wan_ip}}'
     - with_items: '{{groups["worker"]}}'
       shell: route del default; route add default gw {{npc_instance.lan_ip}}
       delegate_to: '{{item}}'
     
+- hosts: worker
+  tasks:
+    - ping:
+    - shell: route del default; route add default gw 10.173.32.1
+
+- hosts: localhost
+  gather_facts: 'no'
+  vars:
+    npc_setup:
+      absent: omit
+      add_hosts: false
+    npc_config:
+      ssh_key: 
+        name: ansible-tests
+    npc_instances: 
+      - name: 'debian-test-gw'
+        present: false
+      - name: 'debian-test-w-{a..b}'
+        present: false
+  roles: 
+    - ../ansible-role-npc_setup

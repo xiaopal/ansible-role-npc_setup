@@ -4,8 +4,6 @@
 - hosts: localhost
   gather_facts: 'no'
   vars:
-    npc_setup:
-      absent: omit
     npc_config:
       ssh_key: 
         name: ansible-tests
@@ -65,7 +63,6 @@
   gather_facts: 'no'
   vars:
     npc_setup:
-      absent: omit
       add_hosts: false
     npc_config:
       ssh_key: 

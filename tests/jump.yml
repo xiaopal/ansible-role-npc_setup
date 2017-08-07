@@ -1,9 +1,10 @@
 ---
-
 # Setup npc instances
 - hosts: localhost
   gather_facts: 'no'
   vars:
+    npc_setup:
+      absent: destroy
     npc_config:
       ssh_key: 
         name: ansible-tests

@@ -4,7 +4,7 @@
     {% if (npc_setup | default({})).init_ssh_key | default(true) %}
       --init-ssh-key 
     {% endif %}
-    {% if (npc_setup | default({})).absent | default("destroy") == "omit" %}
+    {% if (npc_setup | default({})).absent | default("omit") != "destroy" %}
       --omit-absent
     {% endif %}
     {% for action in npc_actions %}

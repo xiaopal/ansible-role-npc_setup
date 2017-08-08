@@ -15,7 +15,7 @@
       npc_instance_type=npc_effective_config.default_instance_type,
       npc_instance_image=npc_effective_config.default_instance_image
       ) | to_json | quote }}
-    {{ npc_instances_config | to_json | quote }}
+    {{ npc_resources | to_json | quote }}
     {% if ((npc_setup | default({})).log | default("")) | length > 0 %}
       2>> {{ (npc_setup | default({})).log | quote }}
     {% endif %}

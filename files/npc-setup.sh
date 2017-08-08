@@ -80,15 +80,28 @@ do_setup(){
 	[ ! -z "$ACTION_INIT_SSH_KEY" ] && {
 		check_ssh_keys --create <<<"$NPC_SSH_KEY" || return 1
 	}
-	[ ! -z "$ACTION_RESUME" ] || {
-		export ACTION_OMIT_ABSENT
-		init || return 1
-	}
-	[ ! -z "$ACTION_INIT" ] || for ACTION in ${ACTIONS:-create update destroy}; do
-		[ ! -z "$ACTION" ] && {
-			echo "[INFO] $ACTION actions">&2
-			"$ACTION" || return 1
+	[ ! -z "$ACTION_RESUME" ] || export ACTION_OMIT_ABSENT
+
+	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
+		[ ! -z "$ACTION_RESUME" ] || {
+			"init_$RESOURCE" "$NPC_STAGE/.input" "$NPC_STAGE/$RESOURCE" || return 1
 		}
+	
+		[ ! -z "$ACTION_INIT" ] || for ACTION in ${ACTIONS:-create update destroy}; do
+			[ ! -z "$ACTION" ] && {
+				echo "[INFO] $ACTION $RESOURCE">&2
+				[ "$ACTION" = "create" ] && {
+					apply_actions "${RESOURCE}_create" "$NPC_STAGE/$RESOURCE.creating" "$NPC_STAGE/$RESOURCE.created" || return 1
+				}
+				[ "$ACTION" = "update" ] && {
+					apply_actions "${RESOURCE}_update" "$NPC_STAGE/$RESOURCE.updating" "$NPC_STAGE/$RESOURCE.updated" || return 1
+				}
+				[ "$ACTION" = "destroy" ] && {
+					apply_actions "${RESOURCE}_destroy" "$NPC_STAGE/$RESOURCE.destroying" "$NPC_STAGE/$RESOURCE.destroyed" || return 1
+				}
+				
+			}
+		done
 	done
 	echo "[INFO] finish">&2
 	report || return 1
@@ -100,35 +113,6 @@ do_setup(){
 NPC_SETUP_RESOURCES=()
 setup_resources(){
 	NPC_SETUP_RESOURCES=("${NPC_SETUP_RESOURCES[@]}" "$@")
-}
-
-init(){
-	local INPUT="$NPC_STAGE/.input"
-	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		"init_$RESOURCE" "$INPUT" "$NPC_STAGE/$RESOURCE" || return 1
-	done
-	return 0
-}
-
-create(){
-	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "${RESOURCE}_create" "$NPC_STAGE/$RESOURCE.creating" "$NPC_STAGE/$RESOURCE.created" || return 1
-	done
-	return 0
-}
-
-update(){
-	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "${RESOURCE}_update" "$NPC_STAGE/$RESOURCE.updating" "$NPC_STAGE/$RESOURCE.updated" || return 1
-	done
-	return 0
-}
-
-destroy(){
-	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		apply_actions "${RESOURCE}_destroy" "$NPC_STAGE/$RESOURCE.destroying" "$NPC_STAGE/$RESOURCE.destroyed" || return 1
-	done
-	return 0
 }
 
 report(){
@@ -186,6 +170,8 @@ report(){
 
 SCRIPT="${BASH_SOURCE[0]}" && [ -L "$SCRIPT" ] && SCRIPT="$(readlink -f "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname $SCRIPT)"; pwd)" 
-for COMPONENT in $SCRIPT_DIR/npc-setup.*.sh; do
-	. $COMPONENT
-done && do_setup "$@"
+. $SCRIPT_DIR/npc-setup.ctx.sh \
+	&& . $SCRIPT_DIR/npc-setup.ssh_key.sh \
+	&& . $SCRIPT_DIR/npc-setup.volume.sh \
+	&& . $SCRIPT_DIR/npc-setup.instance.sh \
+	&& do_setup "$@"

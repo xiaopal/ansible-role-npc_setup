@@ -4,8 +4,20 @@ plan_resources(){
 	local STAGE="$1" INPUT_EXPECTED="$2" INPUT_ACTUAL="$3" STAGE_MAPPER="$4"
 	local LINE NAME
 	while read -r LINE; do
-		for NAME in $(eval "echo $(jq -r '.name'<<<"$LINE")"); do
-			[ ! -z "$NAME" ] && NAME="$NAME" jq -c '. + {name:env.NAME}'<<<"$LINE"
+		local NAMES=($(eval "echo $(jq -r '.name|sub("^\\*\\:"; "")'<<<"$LINE")")) NAME_INDEX
+		for NAME in "${NAMES[@]}"; do
+			[ ! -z "$NAME" ] || continue
+			while read -r STM_LINE; do 
+				jq_check 'length>1 and (.[1]|strings|startswith("*:"))'<<<"$STM_LINE" || {
+					echo "$STM_LINE" && continue
+				}
+				local STM_VALS=($(eval "echo $(jq -r '.[1]|sub("^\\*\\:"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX
+				for STM_VAL in "${STM_VALS[@]}"; do
+					(( STM_VAL_INDEX++ == NAME_INDEX % ${#STM_VALS[@]} )) \
+						&& STM_VAL="$STM_VAL" jq -c '[.[0],env.STM_VAL]' <<<"$STM_LINE"
+				done 
+			done < <(NAME="$NAME" jq --argjson index "$((NAME_INDEX))" -c '. + {name:env.NAME, name_index:$index}|tostream'<<<"$LINE") \
+				| jq -s 'fromstream(.[])'; ((NAME_INDEX++))
 		done
 	done < <(jq -c 'arrays[]' $INPUT_EXPECTED || >>$STAGE.error) \
 		| jq -sc 'map({ key:.name, value:. }) | from_entries' >$STAGE.expected \
@@ -108,5 +120,27 @@ jq_check(){
 	local CHECK_RESULT="$(jq "${ARGS[@]}")" && [ ! -z "$CHECK_RESULT" ] \
 		&& jq -cre 'select(.)'<<<"$CHECK_RESULT" >${OUTPUT:-/dev/null} && return 0
 	[ ! -z "$OUTPUT" ] && [ -f "$OUTPUT" ] && rm -f "$OUTPUT"
+	return 1
+}
+
+checked_api(){
+	local FILTER ARGS=(); while ! [[ "$1" =~ ^(GET|POST|PUT|DELETE|HEAD)$ ]]; do
+		[ ! -z "$FILTER" ] && ARGS=("${ARGS[@]}" "$FILTER")
+		FILTER="$1" && shift
+	done; ARGS=("${ARGS[@]}" "$@")
+	local RESPONSE="$(npc api --error "${ARGS[@]}")" && [ ! -z "$RESPONSE" ] || {
+		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] No response." >&2
+		return 1
+	}
+	jq_check .code <<<"$RESPONSE" && [ "$(jq -r .code <<<"$RESPONSE")" != "200" ] && {
+		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
+		return 1
+	}
+	if [ ! -z "$FILTER" ]; then
+		jq -ce "($FILTER)//empty" <<<"$RESPONSE" && return 0
+	else
+		jq_check '.' <<<"$RESPONSE" && return 0
+	fi
+	[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
 	return 1
 }

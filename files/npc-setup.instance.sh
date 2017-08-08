@@ -7,6 +7,14 @@ MAPPER_LOAD_INSTANCE='{
 		name: .name,
 		status: .status,
 		lan_ip: .vnet_ip,
+		actual_volumes: (.uuid as $uuid |.attached_volumes//[]|map({
+			key:.name,
+			value:{
+				name:.name, 
+				instance_id: $uuid,
+				volume_uuid: .volumeId
+			}
+		})|from_entries),
 		actual_wan_ip: (.public_ip//false),
 		actual_wan_id: (.public_port_id//false),
 		actual_wan_capacity: (if .bandWidth then "\(.bandWidth|tonumber)M" else false end),
@@ -14,6 +22,15 @@ MAPPER_LOAD_INSTANCE='{
 		actual_type: { cpu:.vcpu, memory:"\(.memory_gb)G"}
 	}'
 FILTER_LOAD_INSTANCE='.status=="ACTIVE" and .lan_ip'
+FILTER_PLAN_VOLUMES='. 
+	+ (if .volumes then
+		({volumes:((.volumes//{}|map_values(.+{present:true, mount:true})) 
+			* (.actual_volumes//{}|map_values(.+{mount:false})))} 
+		| .+{
+			mount: .mount,
+			unmount: (.present|not)
+		})
+	else {} end)'
 
 init_instances(){
 	local INPUT="$1" STAGE="$2"
@@ -31,7 +48,9 @@ init_instances(){
 					| if '"$FILTER_LOAD_INSTANCE"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
 				)' GET '/api/v1/vm/allInstanceInfo?pageSize=9999&pageNum=1' \
 				|| >>$STAGE.error) \
-			'. + (if .wan_ip then
+			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:.}})|from_entries)} else {} end)
+			|'"$FILTER_PLAN_VOLUMES"'
+			|. + (if .wan_ip then
 					if .actual_wan_ip|not then
 						{bind_wan_ip:true}
 					elif .wan_ip=="new" or .wan_ip==true or .wan_ip=="any" then
@@ -52,6 +71,10 @@ init_instances(){
 					else {} end
 					+ if .instance_image and .actual_image != .instance_image then
 						{update: true, recreate: true}
+					else {} end
+					+ if .volumes then 
+						# and (.volumes|map(select(.mount or .unmount))|length>0) then
+						{update: true, update_volumes: true}
 					else {} end
 					+ if .bind_wan_ip or .unbind_wan_ip then
 						{update: true}
@@ -111,6 +134,13 @@ instances_prepare(){
 
 		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys || return 1
 	}
+	
+	jq_check '.volumes'<<<"$INSTANCE" && while read -r VOLUME; do
+		jq_check '.present'<<<"$VOLUME" && {
+			volumes_lookup "$(jq -r '.name'<<<"$VOLUME")">/dev/null || return 1 
+		}
+	done < <(jq -c '.volumes[]'<<<"$INSTANCE")
+
 	local WAN_IP
 	jq_check '.bind_wan_ip and (.rebind_wan_ip|not)'<<<"$INSTANCE" && {
 		WAN_IP="$(instances_acquire_ip "$(jq -r '.wan_ip'<<<"$INSTANCE")")" && [ ! -z "$WAN_IP" ] || return 1
@@ -132,6 +162,18 @@ instances_prepare(){
 	}'"+$WAN_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
+instances_wait_instance(){
+	local INSTANCE_ID="$1" CTX="$2" && shift && shift && [ ! -z "$INSTANCE_ID" ] || return 1
+	local ARGS=("$@") && (( ${#ARGS[@]} > 0)) || ARGS=('select(.)') 
+	while action_check_continue "$CTX"; do
+		npc api "json|$MAPPER_LOAD_INSTANCE|select($FILTER_LOAD_INSTANCE)" GET "/api/v1/vm/$INSTANCE_ID" \
+			| jq_check "${ARGS[@]}" \
+			&& return 0
+		sleep "$NPC_ACTION_PULL_SECONDS"
+	done
+	return 1
+}
+
 instances_create(){
 	local INSTANCE="$(instances_prepare "$1")" RESULT="$2" CTX="$3" && [ -z "$INSTANCE" ] && return 1
 	local CREATE_INSTANCE="$(jq -c '{
@@ -150,19 +192,15 @@ instances_create(){
 	while true; do
 		local RESPONSE="$(npc api --error 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
 			&& [ ! -z "$RESPONSE" ] || return 1
-		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] && {
-			while action_check_continue "$CTX"; do
-				npc api "json|$MAPPER_LOAD_INSTANCE|select($FILTER_LOAD_INSTANCE)" GET "/api/v1/vm/$INSTANCE_ID" \
-					| jq_check --argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT \
-					&& {
-						echo "[INFO] instance '$INSTANCE_ID' created." >&2
-						instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
-						return 0
-					}
-				sleep "$NPC_ACTION_PULL_SECONDS"
-			done
-			return 1
-		}
+		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
+			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
+				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT \
+			&& {
+				echo "[INFO] instance '$INSTANCE_ID' created." >&2
+				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+				return 0
+			}
 		echo "[ERROR] $RESPONSE" >&2
 		# {"code":4030001,"msg":"Api freq out of limit."}
 		[ "$(jq -r .code <<<"$RESPONSE")" = "4030001" ] && ( 
@@ -176,11 +214,39 @@ instances_create(){
 	done
 }
 
+instances_update_volumes(){
+	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" MOUNT_FILTER UNMOUNT_FILTER
+	if jq_check '.volumes and (.create or .recreate)'<<<"$INSTANCE"; then
+		MOUNT_FILTER='select(.present)'
+	elif jq_check '.volumes and .update and .update_volumes'<<<"$INSTANCE"; then
+		INSTANCE="$(instances_wait_instance "$INSTANCE_ID" "$CTX" --stdout \
+			--argjson instance "$INSTANCE" \
+			'select(.)|$instance + .|'"$FILTER_PLAN_VOLUMES")" \
+			&& [ ! -z "$INSTANCE" ] || return 1
+		jq_check '.volumes and (.volumes|map(select(.mount or .unmount))|length>0)'<<<"$INSTANCE" || return 0
+		MOUNT_FILTER='select(.mount)'
+		UNMOUNT_FILTER='select(.unmount)'
+	else
+		return 0
+	fi
+	[ ! -z "$UNMOUNT_FILTER" ] && {
+		while read -r VOLUME_NAME; do
+			volumes_unmount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" || return 1
+		done < <(jq -cr ".volumes[]|$UNMOUNT_FILTER|.name"<<<"$INSTANCE")
+	}
+	[ ! -z "$MOUNT_FILTER" ] && {
+		while read -r VOLUME_NAME; do
+			volumes_mount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" || return 1
+		done < <(jq -cr ".volumes[]|$MOUNT_FILTER|.name"<<<"$INSTANCE")
+	}
+	return 0
+}
+
 instances_update_wan(){
 	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" UPDATE_LOCK="$NPC_STAGE/instances.update_wan"
 	jq_check '.update and (.recreate|not) and .unbind_wan_ip'<<<"$INSTANCE" &&{
 		local PARAMS="$(jq -r '@uri "pubIp=\(.actual_wan_ip)&portId=\(.actual_wan_id)"'<<<"$INSTANCE")"
-		(exec 100>$UPDATE_LOCK && flock 100 && instances_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmountPublicIp?$PARAMS") || {
+		(exec 100>$UPDATE_LOCK && flock 100 && checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmountPublicIp?$PARAMS") || {
 			echo '[ERROR] failed to unbind wan_ip.' >&2
 			return 1
 		}
@@ -193,7 +259,7 @@ instances_update_wan(){
 	} 
 	jq_check '.bind_wan_ip'<<<"$INSTANCE" &&{
 		local PARAMS="$(jq -r '@uri "pubIp=\(.wan_ip)&portId=\(.wan_id)&qosMode=netflow&bandWidth=\(.wan_capacity//"1M"|sub("[Mm]$"; "")|tonumber)"'<<<"$INSTANCE")"
-		(exec 100>$UPDATE_LOCK && flock 100 && instances_api PUT "/api/v1/vm/$INSTANCE_ID/action/mountPublicIp?$PARAMS") || {
+		(exec 100>$UPDATE_LOCK && flock 100 && checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mountPublicIp?$PARAMS") || {
 			echo '[ERROR] failed to bind wan_ip.' >&2
 			return 1
 		}
@@ -216,6 +282,7 @@ instances_update(){
 		return 1
 	}
 	local INSTANCE_ID="$(jq -r .id<<<"$INSTANCE")"
+	instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 	instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 	echo "[INFO] instance '$INSTANCE_ID' updated." >&2
 	return 0
@@ -224,23 +291,9 @@ instances_update(){
 instances_destroy(){
 	local INSTANCE="$1"
 	local INSTANCE_ID="$(jq -r .id<<<"$INSTANCE")"
-	instances_api DELETE "/api/v1/vm/$INSTANCE_ID" && {
+	checked_api DELETE "/api/v1/vm/$INSTANCE_ID" && {
 		echo "[INFO] instance '$INSTANCE_ID' destroyed." >&2
 		return 0
 	}
-	return 1
-}
-
-instances_api(){
-	local FILTER; [[ "$1" =~ ^(GET|POST|PUT|DELETE|HEAD)$ ]] || {
-		FILTER="$1" && shift
-	}
-	local RESPONSE="$(npc api --error "$@")"
-	[ ! -z "$RESPONSE" ] && [ "$(jq -r .code <<<"$RESPONSE")" = "200" ] && {
-		[ -z "$FILTER" ] && return 0 || {
-			jq -ce "($FILTER)//empty" <<<"$RESPONSE" && return 0
-		}
-	}
-	echo "[ERROR] $RESPONSE" >&2
 	return 1
 }

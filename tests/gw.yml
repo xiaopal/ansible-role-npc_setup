@@ -11,8 +11,14 @@
       default_instance_type:
         cpu: 2
         memory: 4G
+    npc_volumes:
+      - name: hd-test-{gw,{a..b}}
+        capacity: 100G
+        present: true
     npc_instances: 
       - name: 'debian-test-gw'
+        volumes:
+          - hd-test-gw
         wan_ip: any
         wan_capacity: 100m
         ssh_host_by: wan_ip
@@ -20,6 +26,8 @@
           - gw
           - jump
       - name: 'debian-test-w-{a..b}'
+        volumes:
+          - '*:hd-test-{a..b}'
         ssh_jump_host: debian-test-gw
         groups:
           - worker
@@ -67,6 +75,9 @@
     npc_config:
       ssh_key: 
         name: ansible-tests
+    npc_volumes:
+      - name: hd-test-{gw,{a..b}}
+        present: false
     npc_instances: 
       - name: 'debian-test-gw'
         present: false

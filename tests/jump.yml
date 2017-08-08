@@ -24,7 +24,6 @@
         wan_capacity: 100m
         ssh_host_by: wan_ip
         ssh_jump_host: false
-
       - name: 'debian-test-{1..2}'
         groups:
           - tests
@@ -74,9 +73,9 @@
     npc_instances: 
       - name: 'ssh-jump-test'
         present: false
-      - name: 'debian-test-2'
+      - name: 'debian-test-{1..3}'
         present: false
-      - name: 'debian-test-3'
+      - name: 'ubuntu-test'
         present: false
   roles: 
     - ../ansible-role-npc_setup

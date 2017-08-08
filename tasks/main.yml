@@ -21,7 +21,10 @@
             memory: 4G   
       set_fact:
         npc_effective_config: "{{ npc_effective_config | default(npc_default_config) | combine(npc_config|default({})) }}"
-        npc_instances_config: "{{ dict(npc_instances=npc_instances|default(false)) }}"
+        npc_resources: "{{ dict(
+            npc_volumes=npc_volumes|default(false),
+            npc_instances=npc_instances|default(false)
+          ) }}"
 
 - name: setup
   block:

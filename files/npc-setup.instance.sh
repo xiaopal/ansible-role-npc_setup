@@ -131,8 +131,11 @@ instances_prepare(){
 
 	local IMAGE_ID
 	jq_check '.create or .recreate'<<<"$INSTANCE" && {
-		local IMAGE_NAME="$(jq -r '.instance_image//.default_instance_image//empty'<<<"$INSTANCE")"
-		[ ! -z "$IMAGE_NAME" ] && IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
+		local IMAGE_NAME="$(jq -r '.instance_image//.default_instance_image//empty'<<<"$INSTANCE")" && [ ! -z "$IMAGE_NAME" ] || {
+			echo '[ERROR] instance_image required.' >&2
+			return 1
+		} 
+		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
 
 		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys || return 1
 	}

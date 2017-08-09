@@ -36,20 +36,22 @@ init_instances(){
 	local INPUT="$1" STAGE="$2"
 	jq_check '.npc_instances|arrays' $INPUT && {
 		plan_resources "$STAGE" \
-			<(jq -c '. as $input | .npc_instances | map(.+{
-					default_instance_image: $input.npc_instance_image,
-					default_instance_type: $input.npc_instance_type,
-					'"${NPC_SSH_KEY_FILE:+ssh_key_file: env.NPC_SSH_KEY_FILE,}"'
-					ssh_keys: ((.ssh_keys//[]) + [env.NPC_SSH_KEY] | unique)
-				})' $INPUT || >>$STAGE.error) \
+			<(jq -c '. as $input | .npc_instances | map( . 
+				+ {default_instance_image: $input.npc_instance_image, default_instance_type: $input.npc_instance_type}
+				+ ( if env.NPC_SSH_KEY|length>0 then {ssh_keys:((.ssh_keys//[])+[env.NPC_SSH_KEY]|unique)} else {} end )
+				+ ( if env.NPC_SSH_KEY_FILE|length>0 then {default_ssh_key_file: env.NPC_SSH_KEY_FILE} else {} end )
+				)' $INPUT || >>$STAGE.error) \
 			<(npc api 'json.instances | map(
-				select(try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY]))
-					|'"$MAPPER_LOAD_INSTANCE"'
-					| if '"$FILTER_LOAD_INSTANCE"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
+				if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
+					(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
+					else . end
+				|'"$MAPPER_LOAD_INSTANCE"'
+				| if '"$FILTER_LOAD_INSTANCE"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
 				)' GET '/api/v1/vm/allInstanceInfo?pageSize=9999&pageNum=1' \
 				|| >>$STAGE.error) \
 			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:.}})|from_entries)} else {} end)
 			|'"$FILTER_PLAN_VOLUMES"'
+			| if .missing_ssh_key|not then (. + {ssh_key_file:(.ssh_key_file//.default_ssh_key_file)}) else . end
 			|. + (if .wan_ip then
 					if .actual_wan_ip|not then
 						{bind_wan_ip:true}
@@ -190,13 +192,14 @@ instances_create(){
 			}
 		}'<<<"$INSTANCE")"
 	while true; do
-		local RESPONSE="$(npc api --error 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
-			&& [ ! -z "$RESPONSE" ] || return 1
+		local RESPONSE="$(api_create_instance "$CREATE_INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1
 		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
 			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
 				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT \
 			&& {
-				echo "[INFO] instance '$INSTANCE_ID' created." >&2
+				echo "[INFO] instance '$INSTANCE_ID' created." >&2 
+				# 等待5秒,期望云主机操作系统起来（否则可能导致绑定云硬盘失败）
+				action_sleep 5s "$CTX" || return 1
 				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				return 0
@@ -204,14 +207,23 @@ instances_create(){
 		echo "[ERROR] $RESPONSE" >&2
 		# {"code":4030001,"msg":"Api freq out of limit."}
 		[ "$(jq -r .code <<<"$RESPONSE")" = "4030001" ] && ( 
-			exec 100>$NPC_STAGE/instances.retries && flock 100
-			WAIT_SECONDS="$NPC_ACTION_RETRY_SECONDS"
-			action_check_continue "$CTX" && while sleep 1s && action_check_continue "$CTX"; do
-				(( --WAIT_SECONDS > 0 )) || exit 0
-			done; exit 1
-		) && continue
+			exec 100>$NPC_STAGE/instances.retries && flock 100 \
+				&& action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" ) && continue
 		return 1
 	done
+}
+
+api_create_instance(){
+	local CREATE_INSTANCE="$1"
+	(
+		exec 100>$NPC_STAGE/instances.create_lock && flock 100
+		local RESPONSE="$(npc api --error 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
+			&& echo "$RESPONSE" \
+			&& [ ! -z "$RESPONSE" ]  \
+			&& local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" \
+			&& [ ! -z "$INSTANCE_ID" ] \
+			&& sleep 1s; # 等待1秒,避免 Api freq out of limit
+	)	
 }
 
 instances_update_volumes(){
@@ -282,10 +294,14 @@ instances_update(){
 		return 1
 	}
 	local INSTANCE_ID="$(jq -r .id<<<"$INSTANCE")"
-	instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
-	instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
-	echo "[INFO] instance '$INSTANCE_ID' updated." >&2
-	return 0
+	instances_wait_instance "$INSTANCE_ID" "$CTX" \
+				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT && {
+		instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+		instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+		echo "[INFO] instance '$INSTANCE_ID' updated." >&2
+		return 0
+	}
+	return 1
 }
 
 instances_destroy(){

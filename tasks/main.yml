@@ -13,8 +13,6 @@
         npc_default_config:
           app_key: 
           app_secret:
-          ssh_key:
-            name: ansible 
           default_instance_image: 
           default_instance_type:
             cpu: 2

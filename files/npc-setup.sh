@@ -7,7 +7,7 @@ NPC_ACTION_PULL_SECONDS=${NPC_ACTION_PULL_SECONDS:-1}
 NPC_ACTION_RETRY_SECONDS=${NPC_ACTION_RETRY_SECONDS:-5}
 
 do_setup(){
-	local ARG INPUT='{}' ACTIONS ACTION_INIT ACTION_SUSPEND ACTION_RESUME ACTION_RESTART ACTION_INIT_SSH_KEY ACTION_OMIT_ABSENT
+	local ARG INPUT='{}' ACTIONS ACTION_INIT ACTION_SUSPEND ACTION_RESUME ACTION_RESTART ACTION_INIT_SSH_KEY ACTION_OMIT_ABSENT ACTION_FILTER_BY_SSH_KEY
 	while ARG="$1" && shift; do
 		[ ! -z "$ARG" ] && case "$ARG" in
 			--create|--update|--destroy)
@@ -15,6 +15,9 @@ do_setup(){
 				;;
 			--omit-absent)
 				ACTION_OMIT_ABSENT='Y'
+				;;
+			--filter-by-ssh-key)
+				ACTION_FILTER_BY_SSH_KEY='Y'
 				;;
 			--init|--setup)
 				ACTION_INIT='Y'
@@ -73,14 +76,18 @@ do_setup(){
 		jq -c '.'<<<"$INPUT" >$NPC_STAGE/.input || return 1
 	}
 
-	local NPC_SSH_KEY="$(jq -r '.npc_ssh_key.name//"ansible"' $NPC_STAGE/.input)"
-	local NPC_SSH_KEY_FILE="$(cd ~; pwd)/.npc/ssh_key.$NPC_SSH_KEY" && [ -f "$NPC_SSH_KEY_FILE" ] || NPC_SSH_KEY_FILE=
-	export NPC_SSH_KEY NPC_SSH_KEY_FILE
 	echo "[INFO] init" >&2
+	local NPC_SSH_KEY="$(jq -r 'select(.npc_ssh_key)|.npc_ssh_key.name//empty' $NPC_STAGE/.input)" NPC_SSH_KEY_FILE
 	[ ! -z "$ACTION_INIT_SSH_KEY" ] && {
+		[ ! -z "$NPC_SSH_KEY" ] || {
+			echo "[ERROR] npc_ssh_key not defined." >&2
+			return 1
+		}
 		check_ssh_keys --create <<<"$NPC_SSH_KEY" || return 1
 	}
-	[ ! -z "$ACTION_RESUME" ] || export ACTION_OMIT_ABSENT
+	[ ! -z "$NPC_SSH_KEY" ] && NPC_SSH_KEY_FILE="$(cd ~; pwd)/.npc/ssh_key.$NPC_SSH_KEY" && [ -f "$NPC_SSH_KEY_FILE" ] || NPC_SSH_KEY_FILE=
+	export NPC_SSH_KEY NPC_SSH_KEY_FILE
+	[ ! -z "$ACTION_RESUME" ] || export ACTION_OMIT_ABSENT ACTION_FILTER_BY_SSH_KEY
 
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
 		[ ! -z "$ACTION_RESUME" ] || {
@@ -118,24 +125,25 @@ setup_resources(){
 report(){
 	report_resources(){
 		local RESOURCE="$1" STAGE="$NPC_STAGE/$1"
+		local RESOURCE_FILTER="{$RESOURCE:([{key:.name,value:.}]|from_entries)}"
 		[ -f $STAGE ] && {
-			jq -nc "{ $RESOURCE:[] }"
-			jq -c ".[]|select(.actual_present and (.create or .update or .destroy or .absent | not))|{$RESOURCE:[.]}" $STAGE		
+			jq -nc "{ $RESOURCE:{} }"
+			jq -c ".[]|select(.actual_present and (.create or .update or .destroy or .absent | not))|$RESOURCE_FILTER" $STAGE		
 			[ -f $STAGE.creating ] && if [ ! -f $STAGE.created ]; then
 				jq -c '{creating: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.creating
 			else
-				jq -c '.+{change_action:"created"}|'"{$RESOURCE:[.]}" $STAGE.created
+				jq -c '.+{change_action:"created"}|'"$RESOURCE_FILTER" $STAGE.created
 				jq -c '{created: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.created
 			fi
 			[ -f $STAGE.updating ] && if [ ! -f $STAGE.updated ]; then
-				jq -c '.+{change_action:"updating"}|'"{$RESOURCE:[.]}" $STAGE.updating
+				jq -c '.+{change_action:"updating"}|'"$RESOURCE_FILTER" $STAGE.updating
 				jq -c '{updating: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.updating
 			else
-				jq -c '.+{change_action:"updated"}|'"{$RESOURCE:[.]}" $STAGE.updated
+				jq -c '.+{change_action:"updated"}|'"$RESOURCE_FILTER" $STAGE.updated
 				jq -c '{updated: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.updated
 			fi
 			[ -f $STAGE.destroying ] && if [ ! -f $STAGE.destroyed ]; then
-				jq -c '.+{change_action:"destroying"}|'"{$RESOURCE:[.]}" $STAGE.destroying
+				jq -c '.+{change_action:"destroying"}|'"$RESOURCE_FILTER" $STAGE.destroying
 				jq -c '{destroying: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.destroying
 			else
 				jq -c '{destroyed: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.destroyed
@@ -146,7 +154,7 @@ report(){
 	
 	local REDUCE_FILTER
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		REDUCE_FILTER="$REDUCE_FILTER $RESOURCE: (if \$item.$RESOURCE then ((.$RESOURCE//[]) + \$item.$RESOURCE) else .$RESOURCE end),"
+		REDUCE_FILTER="$REDUCE_FILTER $RESOURCE: (if \$item.$RESOURCE then ((.$RESOURCE//{}) + \$item.$RESOURCE) else .$RESOURCE end),"
 	done
 	{
 		for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do

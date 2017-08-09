@@ -83,11 +83,16 @@ apply_actions(){
 	return 0
 }
 
+time_to_seconds(){
+	local SEC="$1"; 
+	[[ "$SEC" = *s ]] && SEC="${SEC%s}"
+	[[ "$SEC" = *m ]] && SEC="${SEC%m}" && ((SEC *= 60))
+	echo "$SEC"
+}
+
 action_check_continue(){
-	local START RESULT TIMEOUT="${2:-$NPC_ACTION_TIMEOUT}"
+	local START RESULT TIMEOUT="$(time_to_seconds "${2:-$NPC_ACTION_TIMEOUT}")"
 	read -r START RESULT _<<<"$1"|| return 1
-	[[ "$TIMEOUT" = *s ]] && TIMEOUT="${TIMEOUT%s}"
-	[[ "$TIMEOUT" = *m ]] && TIMEOUT="${TIMEOUT%m}" && ((TIMEOUT *= 60))
 	(( SECONDS - START < TIMEOUT )) || {
 		echo "[ERROR] timeout" >&2
 		return 1
@@ -97,6 +102,13 @@ action_check_continue(){
 		return 1
 	}
 	return 0
+}
+
+action_sleep(){
+	local WAIT_SECONDS="$(time_to_seconds "$1")" && shift;
+	while action_check_continue "$@"; do
+		(( WAIT_SECONDS-- > 0 )) || return 0; sleep 1s
+	done; return 1
 }
 
 jq_check(){

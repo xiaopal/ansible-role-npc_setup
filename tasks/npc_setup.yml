@@ -1,17 +1,22 @@
 ---
 - name: npc setup
   shell: npc setup
-    {% if (npc_setup | default({})).init_ssh_key | default(true) %}
+    {% if (npc_setup | default({})).init_ssh_key | default(npc_effective_config.ssh_key|default(false,true) != false) %}
       --init-ssh-key 
     {% endif %}
     {% if (npc_setup | default({})).absent | default("omit") != "destroy" %}
-      --omit-absent
+      --omit-absent 
+      {% if (npc_setup | default({})).filter_by_ssh_key | default(false) %}
+        --filter-by-ssh-key
+      {% endif %}
+    {% elif (npc_setup | default({})).filter_by_ssh_key | default(true) %}
+      --filter-by-ssh-key
     {% endif %}
     {% for action in npc_actions %}
       --{{ action }}
     {% endfor %}
     {{ dict(
-      npc_ssh_key=npc_effective_config.ssh_key,
+      npc_ssh_key=npc_effective_config.ssh_key|default(false),
       npc_instance_type=npc_effective_config.default_instance_type,
       npc_instance_image=npc_effective_config.default_instance_image
       ) | to_json | quote }}
@@ -25,10 +30,10 @@
     NPC_API_ENDPOINT: "{{ npc_effective_config.api_endpoint | default('') }}"
     NPC_API_KEY: "{{ npc_effective_config.app_key | default('') }}"
     NPC_API_SECRET: "{{ npc_effective_config.app_secret | default('') }}"
-    NPC_ACTION_FORKS: "{{ npc_effective_config.action_focks | default('') }}"
-    NPC_ACTION_TIMEOUT: "{{ npc_effective_config.action_timeout | default('') }}"
-    NPC_ACTION_PULL_SECONDS: "{{ npc_effective_config.action_pull_interval | default('') }}"
-    NPC_ACTION_RETRY_SECONDS: "{{ npc_effective_config.action_retry_interval | default('') }}"
+    NPC_ACTION_FORKS: "{{ (npc_setup | default({})).action_focks | default('') }}"
+    NPC_ACTION_TIMEOUT: "{{ (npc_setup | default({})).action_timeout | default('') }}"
+    NPC_ACTION_PULL_SECONDS: "{{ (npc_setup | default({})).action_pull_interval | default('') }}"
+    NPC_ACTION_RETRY_SECONDS: "{{ (npc_setup | default({})).action_retry_interval | default('') }}"
   register: npc_execution
   changed_when: false
 
@@ -61,7 +66,7 @@
     - (npc_setup | default({})).add_hosts | default(true)
   block:
     - name: add hosts
-      with_items: "{{ npc.instances | default([]) }}"
+      with_items: "{{ npc.instances.values() }}"
       vars:
           npc_group_by: '{{ ((npc_setup | default({})).group_by | default({}, true)) }}'
           npc_change_group: '{{npc_group_by[item.change_action|default("none", true)]|default("", true)}}'
@@ -71,19 +76,20 @@
           ssh_jump_host: '{{item.ssh_jump_host|default(npc_effective_config.ssh_jump_host)|default(false,true)}}'
           ssh_jump_user: '{{item.ssh_jump_user|default(npc_effective_config.ssh_jump_user)|default(false,true)}}'
           ssh_jump_key_file: '{{item.ssh_jump_key_file|default(npc_effective_config.ssh_jump_key_file)|default(false,true)}}'
+          npc_jump_vars: '{{npc.instances[ssh_jump_host]|default({})}}'
           ssh_jump_vars: '{{hostvars[ssh_jump_host]|default({})}}'
           ssh_jump_args: '{% if ssh_jump_host != false %}-o ProxyCommand="ssh -W %h:%p -q 
-            {% for host in npc.instances|selectattr("name", "equalto", ssh_jump_host) %}
-              {% if ssh_jump_key_file|default(host.ssh_key_file,true)|default(false) %}
-                -i {{ ssh_jump_key_file|default(host.ssh_key_file,true) }}
+            {% if npc.instances.has_key(ssh_jump_host) %}
+              {% if ssh_jump_key_file|default(npc_jump_vars.ssh_key_file,true)|default(false) %}
+                -i {{ ssh_jump_key_file|default(npc_jump_vars.ssh_key_file,true) }}
               {% endif %}
-              {% if ssh_jump_user|default(host.ssh_user,true)|default(false) %}{{ssh_jump_user|default(host.ssh_user,true)}}@{% endif %}{{host[host.ssh_host_by|default(npc_effective_config.ssh_host_by|default("lan_ip"))]}}
+              {% if ssh_jump_user|default(npc_jump_vars.ssh_user,true)|default(false) %}{{ssh_jump_user|default(npc_jump_vars.ssh_user,true)}}@{% endif %}{{npc_jump_vars[npc_jump_vars.ssh_host_by|default(npc_effective_config.ssh_host_by|default("lan_ip"))]}}
             {% else %}
               {% if ssh_jump_key_file|default(ssh_jump_vars.ansible_ssh_private_key_file,true)|default(false) %}
                 -i {{ ssh_jump_key_file|default(ssh_jump_vars.ansible_ssh_private_key_file,true) }}
               {% endif %}
               {% if ssh_jump_user|default(ssh_jump_vars.ansible_user,true)|default(false) %}{{ssh_jump_user|default(ssh_jump_vars.ansible_user,true)}}@{% endif %}{{ssh_jump_vars.ansible_host|default(ssh_jump_host)}}
-            {% endfor %}"{% endif %}'
+            {% endif %}"{% endif %}'
       add_host: 
       args: '{{ dict(
           hostname=item.name,
@@ -97,4 +103,4 @@
       changed_when: false
     - name: summary
       debug: 
-        msg: "{{npc.instances|length}} instances registered: {{npc.instances|map(attribute='name')|join(', ')}}"
+        msg: "{{npc.instances|length}} instances registered: {{npc.instances.keys()|join(', ')}}"

@@ -3,6 +3,7 @@
 # Setup npc instances
 - hosts: localhost
   gather_facts: 'no'
+  tags: setup
   vars:
     # 公共配置
     npc_config:
@@ -32,11 +33,12 @@
         # any 绑定任意可用的外网IP，如果没有则新建IP；new 总是创建新IP
         wan_ip: any
         # 外网带宽
-        wan_capacity: 100m
+        wan_capacity: 10m
         # 作为ansible_host的地址类型：lan_ip私有IP（默认）, wan_ip公网IP
         ssh_host_by: wan_ip
         # ansible主机分组
         groups:
+          - volume_attached
           - gw
           - jump
 
@@ -49,6 +51,7 @@
         ssh_jump_host: debian-test-gw
         # ansible主机分组
         groups:
+          - volume_attached
           - worker
         # ansible主机变量
         vars:
@@ -60,6 +63,7 @@
 
 # 配置出站网关（兼跳板机）
 - hosts: gw
+  tags: setup
   tasks:
     - sysctl:
         name: net.ipv4.ip_forward
@@ -84,17 +88,34 @@
     - with_items: '{{groups["worker"]}}'
       shell: route del default; route add default gw {{npc_instance.lan_ip}}
       delegate_to: '{{item}}'
+
+# 初始化云硬盘
+- hosts: volume_attached
+  tags: setup
+  tasks:
+    - filesystem:
+        dev: /dev/vdc
+        fstype: ext4
+        resizefs: true
+    - mount: 
+        path: /volume
+        src: /dev/vdc
+        fstype: ext4
+        state: mounted
     
-# 测试worker节点， 然后还原所有worker节点的默认网关
+# 测试worker节点
 - hosts: worker
+  tags: setup
   tasks:
     - ping:
     - setup:
-    - shell: route del default; route add default gw 10.173.32.1
+    # 还原默认网关
+    # - shell: route del default; route add default gw 10.173.32.1
 
 # 清理所有主机和硬盘
 - hosts: localhost
   gather_facts: 'no'
+  tags: cleanup
   vars:
     npc_setup:
       add_hosts: false

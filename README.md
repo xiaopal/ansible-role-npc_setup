@@ -119,3 +119,22 @@ $ cat playbook.yml && ansible-playbook playbook.yml
   roles: 
     - xiaopal.npc_setup
 ```
+
+
+## npc setup
+```
+# npc setup --omit-absent "$(jq -n '{
+  npc_volumes: [
+    {name:"test-hd-1",capacity:"10G"},
+    {name:"test-hd-2",capacity:"10G"}
+  ],
+  npc_instances: [
+    {
+      name:"test-vm",
+      instance_image:"Debian 8.6",
+      ssh_keys:["Xiaohui-GRAYPC"], 
+      volumes:["test-hd-1","test-hd-2"]
+    }
+  ]
+}')"
+```

@@ -12,7 +12,8 @@ MAPPER_LOAD_INSTANCE='{
 			value:{
 				name:.name, 
 				instance_id: $uuid,
-				volume_uuid: .volumeId
+				volume_uuid: .volumeId,
+				device: .mountPath
 			}
 		})|from_entries),
 		actual_wan_ip: (.public_ip//false),
@@ -186,7 +187,7 @@ instances_create(){
 			server_info: {
 				azCode: (.zone//.az//"A"),
 				instance_name: .name,
-				ssh_key_names: .ssh_keys,
+				ssh_key_names: (.ssh_keys//[]),
 				image_id: .image_id,
 				cpu_weight: .cpu_weight,
 				memory_weight: .memory_weight,
@@ -198,13 +199,14 @@ instances_create(){
 		local RESPONSE="$(api_create_instance "$CREATE_INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1
 		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
 			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
-				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT \
 			&& {
 				echo "[INFO] instance '$INSTANCE_ID' created." >&2 
 				# 等待5秒,期望云主机操作系统起来（否则可能导致绑定云硬盘失败）
 				action_sleep 5s "$CTX" || return 1
 				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+				instances_wait_instance "$INSTANCE_ID" "$CTX" \
+					--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT || return 1
 				return 0
 			}
 		echo "[ERROR] $RESPONSE" >&2
@@ -297,10 +299,11 @@ instances_update(){
 		return 1
 	}
 	local INSTANCE_ID="$(jq -r .id<<<"$INSTANCE")"
-	instances_wait_instance "$INSTANCE_ID" "$CTX" \
-				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT && {
+	instances_wait_instance "$INSTANCE_ID" "$CTX" && {
 		instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 		instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+		instances_wait_instance "$INSTANCE_ID" "$CTX" \
+				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT || return 1
 		echo "[INFO] instance '$INSTANCE_ID' updated." >&2
 		return 0
 	}

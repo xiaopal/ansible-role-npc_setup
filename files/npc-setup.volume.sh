@@ -153,3 +153,11 @@ volumes_unmount(){
 	}
 	return 0
 }
+
+report_filters 'if .instances and .volumes then 
+		(.volumes as $volumes | .instances |= map_values(
+			if .volumes then 
+				(.volumes |= map_values(($volumes[.name]//{}) + .)) 
+			else . end 
+		)) 
+	else . end'

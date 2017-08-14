@@ -122,59 +122,14 @@ setup_resources(){
 	NPC_SETUP_RESOURCES=("${NPC_SETUP_RESOURCES[@]}" "$@")
 }
 
-report(){
-	report_resources(){
-		local RESOURCE="$1" STAGE="$NPC_STAGE/$1"
-		local RESOURCE_FILTER="{$RESOURCE:([{key:.name,value:.}]|from_entries)}"
-		[ -f $STAGE ] && {
-			jq -nc "{ $RESOURCE:{} }"
-			jq -c ".[]|select(.actual_present and (.create or .update or .destroy or .absent | not))|$RESOURCE_FILTER" $STAGE		
-			[ -f $STAGE.creating ] && if [ ! -f $STAGE.created ]; then
-				jq -c '{creating: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.creating
-			else
-				jq -c '.+{change_action:"created"}|'"$RESOURCE_FILTER" $STAGE.created
-				jq -c '{created: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.created
-			fi
-			[ -f $STAGE.updating ] && if [ ! -f $STAGE.updated ]; then
-				jq -c '.+{change_action:"updating"}|'"$RESOURCE_FILTER" $STAGE.updating
-				jq -c '{updating: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.updating
-			else
-				jq -c '.+{change_action:"updated"}|'"$RESOURCE_FILTER" $STAGE.updated
-				jq -c '{updated: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.updated
-			fi
-			[ -f $STAGE.destroying ] && if [ ! -f $STAGE.destroyed ]; then
-				jq -c '.+{change_action:"destroying"}|'"$RESOURCE_FILTER" $STAGE.destroying
-				jq -c '{destroying: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.destroying
-			else
-				jq -c '{destroyed: [.+{resource:"'"$RESOURCE"'"}]}' $STAGE.destroyed
-			fi
-			# [ -f $STAGE.omit ] && jq -c '.+{change_action:"omit"}|'"{$RESOURCE:[.]}" $STAGE.omit
-		}
-	}
-	
-	local REDUCE_FILTER
-	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-		REDUCE_FILTER="$REDUCE_FILTER $RESOURCE: (if \$item.$RESOURCE then ((.$RESOURCE//{}) + \$item.$RESOURCE) else .$RESOURCE end),"
-	done
-	{
-		for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
-			report_resources "$RESOURCE"
-		done
-		return 0	
-	} | jq -sc 'reduce .[] as $item ( {}; {
-			'"$REDUCE_FILTER"'
-			creating: (if $item.creating then ((.creating//[]) + $item.creating) else .creating end),
-			updating: (if $item.updating then ((.updating//[]) + $item.updating) else .updating end),
-			destroying: (if $item.destroying then ((.destroying//[]) + $item.destroying) else .destroying end),
-			created: (if $item.created then ((.created//[]) + $item.created) else .created end),
-			updated: (if $item.updated then ((.updated//[]) + $item.updated) else .updated end),
-			destroyed: (if $item.destroyed then ((.destroyed//[]) + $item.destroyed) else .destroyed end)
-		} | with_entries(select(.value))) | . + { 
-			changing: (.creating or .updating or .destroying), 
-			changed: (.created or .updated or .destroyed)
-		}'
+NPC_REPORT_FILTERS=
+report_filters(){
+	NPC_REPORT_FILTERS="$NPC_REPORT_FILTERS | $*"
 }
 
+report(){
+	report_resources --summary --report "$NPC_REPORT_FILTERS" "${NPC_SETUP_RESOURCES[@]}"
+}
 
 SCRIPT="${BASH_SOURCE[0]}" && [ -L "$SCRIPT" ] && SCRIPT="$(readlink -f "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname $SCRIPT)"; pwd)" 

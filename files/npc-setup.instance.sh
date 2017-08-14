@@ -2,7 +2,7 @@
 
 setup_resources "instances"
 
-MAPPER_LOAD_INSTANCE='{
+MAPPER_PRE_LOAD_INSTANCE='{
 		id: .uuid,
 		name: .name,
 		status: .status,
@@ -22,15 +22,26 @@ MAPPER_LOAD_INSTANCE='{
 		actual_image: .images[0].imageName,
 		actual_type: { cpu:.vcpu, memory:"\(.memory_gb)G"}
 	}'
-FILTER_LOAD_INSTANCE='.status=="ACTIVE" and .lan_ip'
-FILTER_PLAN_VOLUMES='. 
-	+ (if .volumes then
-		({volumes:((.volumes//{}|map_values(.+{present:true, mount:true})) 
-			* (.actual_volumes//{}|map_values(.+{mount:false})))} 
-		| .+{
-			mount: .mount,
-			unmount: (.present|not)
-		})
+MAPPER_LOAD_INSTANCE='. + (if .volumes then
+			{volumes: ((.volumes//{}) * (.actual_volumes//{})|with_entries(select(.value.present)))}
+		else {} end)
+	| . + (if .missing_ssh_key|not then
+			{ssh_key_file:(.ssh_key_file//.default_ssh_key_file)} 
+		else {} end)
+	| . + (if (.wan_ip=="new" or .wan_ip==true or .wan_ip=="any") and .actual_wan_ip then 
+			{wan_ip: .actual_wan_ip} 
+		else {} end)'
+FILTER_LOAD_INSTANCE='select(.)|$instance + .|'"$MAPPER_LOAD_INSTANCE"
+FILTER_INSTANCE_STATUS='.status=="ACTIVE" and .lan_ip'
+FILTER_PLAN_VOLUMES='. + (if .volumes then
+		{plan_volumes: (
+			(.volumes//{} | with_entries(.value |= . + {actual_present: false}))
+			* (.actual_volumes//{} | with_entries(.value |= . + {actual_present: true})) 
+			| with_entries(.value |= . + {
+				mount: ((.actual_present|not) and .present), 
+				unmount: (.actual_present and (.present|not)) 
+			})
+		)}
 	else {} end)'
 
 init_instances(){
@@ -46,28 +57,24 @@ init_instances(){
 				if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
 					(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
 					else . end
-				|'"$MAPPER_LOAD_INSTANCE"'
-				| if '"$FILTER_LOAD_INSTANCE"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
+				|'"$MAPPER_PRE_LOAD_INSTANCE"'
+				| if '"$FILTER_INSTANCE_STATUS"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
 				)' GET '/api/v1/vm/allInstanceInfo?pageSize=9999&pageNum=1' \
 				|| >>$STAGE.error) \
-			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:.}})|from_entries)} else {} end)
-			|'"$FILTER_PLAN_VOLUMES"'
-			| if .missing_ssh_key|not then (. + {ssh_key_file:(.ssh_key_file//.default_ssh_key_file)}) else . end
+			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:., present: true}})|from_entries)} else {} end)
+			|'"$MAPPER_LOAD_INSTANCE"'
 			|. + (if .wan_ip then
 					if .actual_wan_ip|not then
-						{bind_wan_ip:true}
-					elif .wan_ip=="new" or .wan_ip==true or .wan_ip=="any" then
-						if .wan_capacity and (.wan_capacity|ascii_upcase) != .actual_wan_capacity then 
-							{wan_ip: .actual_wan_ip, unbind_wan_ip:true, bind_wan_ip:true, rebind_wan_ip:true}
-						else
-							{wan_ip: .actual_wan_ip}
-						end
+						{plan_wan_ip:{bind: true}}
 					elif .wan_ip != .actual_wan_ip then
-						{unbind_wan_ip:true, bind_wan_ip:true}
+						{plan_wan_ip:{bind: true, unbind: true}}
+					elif .wan_capacity and (.wan_capacity|ascii_upcase) != .actual_wan_capacity then
+						{plan_wan_ip:{bind: true, unbind: true, rebind:true}}
 					else {} end
 				elif .wan_ip == false and .actual_wan_ip then
-					{unbind_wan_ip:true}
+					{plan_wan_ip:{unbind: true}}
 				else {} end) 
+			|'"$FILTER_PLAN_VOLUMES"'
 			|. + (if .update then {update: false}
 					+ if  .instance_type and .actual_type != .instance_type then
 						{update: true, recreate: true}
@@ -75,11 +82,11 @@ init_instances(){
 					+ if .instance_image and .actual_image != .instance_image then
 						{update: true, recreate: true}
 					else {} end
-					+ if .volumes then 
-						# and (.volumes|map(select(.mount or .unmount))|length>0) then
+					+ if .plan_volumes then 
+						# and (.plan_volumes|map(select(.mount or .unmount))|length>0) then
 						{update: true, update_volumes: true}
 					else {} end
-					+ if .bind_wan_ip or .unbind_wan_ip then
+					+ if .plan_wan_ip then
 						{update: true}
 					else {} end
 				else {} end)' || return 1
@@ -148,7 +155,7 @@ instances_prepare(){
 	done < <(jq -c '.volumes[]'<<<"$INSTANCE")
 
 	local WAN_IP
-	jq_check '.bind_wan_ip and (.rebind_wan_ip|not)'<<<"$INSTANCE" && {
+	jq_check '.plan_wan_ip and .plan_wan_ip.bind and (.plan_wan_ip.rebind|not)'<<<"$INSTANCE" && {
 		WAN_IP="$(instances_acquire_ip "$(jq -r '.wan_ip'<<<"$INSTANCE")")" && [ ! -z "$WAN_IP" ] || return 1
 	}
 	local WAN_CONFIG="$(jq --argjson acquired "${WAN_IP:-"{}"}" -c '{
@@ -172,7 +179,7 @@ instances_wait_instance(){
 	local INSTANCE_ID="$1" CTX="$2" && shift && shift && [ ! -z "$INSTANCE_ID" ] || return 1
 	local ARGS=("$@") && (( ${#ARGS[@]} > 0)) || ARGS=('select(.)') 
 	while action_check_continue "$CTX"; do
-		npc api "json|$MAPPER_LOAD_INSTANCE|select($FILTER_LOAD_INSTANCE)" GET "/api/v1/vm/$INSTANCE_ID" \
+		npc api "json|$MAPPER_PRE_LOAD_INSTANCE|select($FILTER_INSTANCE_STATUS)" GET "/api/v1/vm/$INSTANCE_ID" \
 			| jq_check "${ARGS[@]}" \
 			&& return 0
 		sleep "$NPC_ACTION_PULL_SECONDS"
@@ -206,7 +213,7 @@ instances_create(){
 				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_wait_instance "$INSTANCE_ID" "$CTX" \
-					--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT || return 1
+					--argjson instance "$INSTANCE" "$FILTER_LOAD_INSTANCE" --out $RESULT || return 1
 				return 0
 			}
 		echo "[ERROR] $RESPONSE" >&2
@@ -238,9 +245,9 @@ instances_update_volumes(){
 	elif jq_check '.volumes and .update and .update_volumes'<<<"$INSTANCE"; then
 		INSTANCE="$(instances_wait_instance "$INSTANCE_ID" "$CTX" --stdout \
 			--argjson instance "$INSTANCE" \
-			'select(.)|$instance + .|'"$FILTER_PLAN_VOLUMES")" \
+			"$FILTER_LOAD_INSTANCE | $FILTER_PLAN_VOLUMES")" \
 			&& [ ! -z "$INSTANCE" ] || return 1
-		jq_check '.volumes and (.volumes|map(select(.mount or .unmount))|length>0)'<<<"$INSTANCE" || return 0
+		jq_check '.plan_volumes and (.plan_volumes|map(select(.mount or .unmount))|length>0)'<<<"$INSTANCE" || return 0
 		MOUNT_FILTER='select(.mount)'
 		UNMOUNT_FILTER='select(.unmount)'
 	else
@@ -249,19 +256,19 @@ instances_update_volumes(){
 	[ ! -z "$UNMOUNT_FILTER" ] && {
 		while read -r VOLUME_NAME; do
 			volumes_unmount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" || return 1
-		done < <(jq -cr ".volumes[]|$UNMOUNT_FILTER|.name"<<<"$INSTANCE")
+		done < <(jq -cr ".plan_volumes[]|$UNMOUNT_FILTER|.name"<<<"$INSTANCE")
 	}
 	[ ! -z "$MOUNT_FILTER" ] && {
 		while read -r VOLUME_NAME; do
 			volumes_mount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" || return 1
-		done < <(jq -cr ".volumes[]|$MOUNT_FILTER|.name"<<<"$INSTANCE")
+		done < <(jq -cr ".plan_volumes[]|$MOUNT_FILTER|.name"<<<"$INSTANCE")
 	}
 	return 0
 }
 
 instances_update_wan(){
 	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" UPDATE_LOCK="$NPC_STAGE/instances.update_wan"
-	jq_check '.update and (.recreate|not) and .unbind_wan_ip'<<<"$INSTANCE" &&{
+	jq_check '.update and (.recreate|not) and .plan_wan_ip and .plan_wan_ip.unbind'<<<"$INSTANCE" &&{
 		local PARAMS="$(jq -r '@uri "pubIp=\(.actual_wan_ip)&portId=\(.actual_wan_id)"'<<<"$INSTANCE")"
 		(exec 100>$UPDATE_LOCK && flock 100 && checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmountPublicIp?$PARAMS") || {
 			echo '[ERROR] failed to unbind wan_ip.' >&2
@@ -274,7 +281,7 @@ instances_update_wan(){
 			sleep "$NPC_ACTION_PULL_SECONDS"
 		done || return 1
 	} 
-	jq_check '.bind_wan_ip'<<<"$INSTANCE" &&{
+	jq_check '.plan_wan_ip and .plan_wan_ip.bind'<<<"$INSTANCE" &&{
 		local PARAMS="$(jq -r '@uri "pubIp=\(.wan_ip)&portId=\(.wan_id)&qosMode=netflow&bandWidth=\(.wan_capacity//"1M"|sub("[Mm]$"; "")|tonumber)"'<<<"$INSTANCE")"
 		(exec 100>$UPDATE_LOCK && flock 100 && checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mountPublicIp?$PARAMS") || {
 			echo '[ERROR] failed to bind wan_ip.' >&2
@@ -303,7 +310,7 @@ instances_update(){
 		instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 		instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 		instances_wait_instance "$INSTANCE_ID" "$CTX" \
-				--argjson instance "$INSTANCE" 'select(.)|$instance + .' --out $RESULT || return 1
+				--argjson instance "$INSTANCE" "$FILTER_LOAD_INSTANCE" --out $RESULT || return 1
 		echo "[INFO] instance '$INSTANCE_ID' updated." >&2
 		return 0
 	}

@@ -1,8 +1,7 @@
 ---
-
 # Setup npc instances
 - hosts: localhost
-  gather_facts: 'no'
+  gather_facts: no
   tags: setup
   vars:
     # 公共配置
@@ -41,7 +40,6 @@
           - volume_attached
           - gw
           - jump
-
       # 同时定义两台云主机 debian-test-a 和 debian-test-b
       - name: 'debian-test-w-{a..b}'
         # 挂载云硬盘，其中hd-test-a挂载到debian-test-a， hd-test-b挂载到 debian-test-b
@@ -60,6 +58,7 @@
     - ../ansible-role-npc_setup
   tasks:
     - debug: msg={{groups["all"]}}
+    - wait_for: port=22 host="{{npc.instances['debian-test-gw'].wan_ip}}" search_regex=OpenSSH delay=5
 
 # 配置出站网关（兼跳板机）
 - hosts: gw
@@ -93,14 +92,17 @@
 - hosts: volume_attached
   tags: setup
   tasks:
-    - filesystem:
-        dev: /dev/vdc
-        fstype: ext4
+    - with_items: '{{(npc_instance.volumes|default({})).values()}}'
+      filesystem:
+      # dev: /dev/vdc
+        dev: '{{item.device}}'
+        fstype: '{{item.fstype|default("ext4",true)}}'
         resizefs: true
-    - mount: 
-        path: /volume
-        src: /dev/vdc
-        fstype: ext4
+    - with_items: '{{(npc_instance.volumes|default({})).values()}}'
+      mount: 
+        path: '{{item.path|default("/volumes/"~item.name, true)}}'
+        src: '{{item.device}}'
+        fstype: '{{item.fstype|default("ext4",true)}}'
         state: mounted
     
 # 测试worker节点
@@ -114,7 +116,7 @@
 
 # 清理所有主机和硬盘
 - hosts: localhost
-  gather_facts: 'no'
+  gather_facts: no
   tags: cleanup
   vars:
     npc_setup:

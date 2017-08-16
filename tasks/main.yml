@@ -4,8 +4,7 @@
     - shell: curl 'https://npc.nos-eastchina1.126.net/dl/install-npc-shell.sh' | /bin/bash
       args:
         creates: /usr/bin/npc
-    - name: copy npc-setup.sh
-      copy: src=npc-setup.sh dest=/usr/npc-shell/npc-setup.sh mode=0755
+    - copy: src=npc-setup.sh dest=/usr/npc-shell/npc-setup.sh mode=0755
     - copy: src={{item}} dest=/usr/npc-shell/
       with_fileglob:
         - npc-setup.*.sh

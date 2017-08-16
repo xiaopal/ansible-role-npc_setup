@@ -5,16 +5,17 @@
 $ ansible-galaxy install xiaopal.npc_setup
 
 $ cat playbook.yml && ansible-playbook playbook.yml
+---
+# Setup npc instances
 - hosts: localhost
-  gather_facts: 'no'
+  gather_facts: no
+  tags: setup
   vars:
     # 公共配置
     npc_config:
-      app_key: <蜂巢APP_KEY>
-      app_secret: <蜂巢APP_SECRET>
       # 用于 ansible 管理的 ssh key 名称，自动在蜂巢创建并下载私钥到~/.npc/ssh_key.<name>
       ssh_key: 
-        name: npc-setup
+        name: ansible-tests
       # 默认云主机镜像名称
       default_instance_image: Debian 8.6
       # 默认云主机规格
@@ -38,14 +39,14 @@ $ cat playbook.yml && ansible-playbook playbook.yml
         # any 绑定任意可用的外网IP，如果没有则新建IP；new 总是创建新IP
         wan_ip: any
         # 外网带宽
-        wan_capacity: 100m
+        wan_capacity: 10m
         # 作为ansible_host的地址类型：lan_ip私有IP（默认）, wan_ip公网IP
         ssh_host_by: wan_ip
         # ansible主机分组
         groups:
+          - volume_attached
           - gw
           - jump
-
       # 同时定义两台云主机 debian-test-a 和 debian-test-b
       - name: 'debian-test-w-{a..b}'
         # 挂载云硬盘，其中hd-test-a挂载到debian-test-a， hd-test-b挂载到 debian-test-b
@@ -55,20 +56,20 @@ $ cat playbook.yml && ansible-playbook playbook.yml
         ssh_jump_host: debian-test-gw
         # ansible主机分组
         groups:
+          - volume_attached
           - worker
         # ansible主机变量
         vars:
           host_var1: value
-
   roles: 
     - xiaopal.npc_setup
   tasks:
     - debug: msg={{groups["all"]}}
-    - debug: msg={{npc.instances}}
-    - debug: msg={{npc.volumes}}
+    - wait_for: port=22 host="{{npc.instances['debian-test-gw'].wan_ip}}" search_regex=OpenSSH delay=5
 
 # 配置出站网关（兼跳板机）
 - hosts: gw
+  tags: setup
   tasks:
     - sysctl:
         name: net.ipv4.ip_forward
@@ -93,18 +94,37 @@ $ cat playbook.yml && ansible-playbook playbook.yml
     - with_items: '{{groups["worker"]}}'
       shell: route del default; route add default gw {{npc_instance.lan_ip}}
       delegate_to: '{{item}}'
+
+# 初始化云硬盘
+- hosts: volume_attached
+  tags: setup
+  tasks:
+    - with_items: '{{(npc_instance.volumes|default({})).values()}}'
+      filesystem:
+      # dev: /dev/vdc
+        dev: '{{item.device}}'
+        fstype: '{{item.fstype|default("ext4",true)}}'
+        resizefs: true
+    - with_items: '{{(npc_instance.volumes|default({})).values()}}'
+      mount: 
+        path: '{{item.path|default("/volumes/"~item.name, true)}}'
+        src: '{{item.device}}'
+        fstype: '{{item.fstype|default("ext4",true)}}'
+        state: mounted
     
-# 测试worker节点， 然后还原所有worker节点的默认网关
+# 测试worker节点
 - hosts: worker
+  tags: setup
   tasks:
     - ping:
-    - apt: name=sudo state=present update_cache=yes
     - setup:
-    - shell: route del default; route add default gw 10.173.32.1
+    # 还原默认网关
+    # - shell: route del default; route add default gw 10.173.32.1
 
 # 清理所有主机和硬盘
 - hosts: localhost
-  gather_facts: 'no'
+  gather_facts: no
+  tags: cleanup
   vars:
     npc_setup:
       add_hosts: false
@@ -118,6 +138,7 @@ $ cat playbook.yml && ansible-playbook playbook.yml
         present: false
   roles: 
     - xiaopal.npc_setup
+
 ```
 
 

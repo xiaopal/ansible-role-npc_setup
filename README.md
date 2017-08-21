@@ -7,7 +7,7 @@ $ ansible-galaxy install xiaopal.npc_setup \
 
 $ declare APP_KEY=<蜂巢APP_KEY> APP_SECRET=<蜂巢APP_SECRET> \
     && cat<<EOF >playbook.yml \
-    && npc playbook --tags="setup" playbook.yml \
+    && npc playbook --tags="setup" -T 30 playbook.yml \
     && read -p 'setup finished, press [enter] to cleanup...' \
     && npc playbook --tags="cleanup" playbook.yml
 ---

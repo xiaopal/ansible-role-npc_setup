@@ -2,13 +2,14 @@
 
 ## How to use
 ```
-$ ansible-galaxy install xiaopal.npc_setup
+$ ansible-galaxy install xiaopal.npc_setup \
+    && ansible-playbook /etc/ansible/roles/xiaopal.npc_setup/tests/noop.yml
 
 $ declare APP_KEY=<蜂巢APP_KEY> APP_SECRET=<蜂巢APP_SECRET> \
     && cat<<EOF >playbook.yml \
-    && ansible-playbook --tags="setup" playbook.yml \
+    && npc playbook --tags="setup" playbook.yml \
     && read -p 'setup finished, press [enter] to cleanup...' \
-    && ansible-playbook --tags="cleanup" playbook.yml
+    && npc playbook --tags="cleanup" playbook.yml
 ---
 - hosts: localhost
   gather_facts: no

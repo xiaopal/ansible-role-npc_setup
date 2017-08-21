@@ -191,8 +191,8 @@ instances_create(){
 	local INSTANCE="$(instances_prepare "$1")" RESULT="$2" CTX="$3" && [ -z "$INSTANCE" ] && return 1
 	local CREATE_INSTANCE="$(jq -c '{
 			bill_info: "HOUR",
-			server_info: {
-				azCode: (.zone//.az//"A"),
+			server_info: ({
+				azCode: (.zone//.az),
 				instance_name: .name,
 				ssh_key_names: (.ssh_keys//[]),
 				image_id: .image_id,
@@ -200,7 +200,7 @@ instances_create(){
 				memory_weight: .memory_weight,
 				ssd_weight: .ssd_weight,
 				description: .description
-			}
+			} | with_entries(select(.value)))
 		}'<<<"$INSTANCE")"
 	while true; do
 		local RESPONSE="$(api_create_instance "$CREATE_INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1

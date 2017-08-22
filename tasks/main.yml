@@ -13,7 +13,7 @@
         - npc-playbook.sh
     - vars:
         npc_default_config:
-          app_key: 
+          app_key:
           app_secret:
           default_instance_image: 
           default_instance_type:

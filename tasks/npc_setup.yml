@@ -29,13 +29,13 @@
   args:
     executable: /bin/bash
   environment:
-    NPC_API_ENDPOINT: "{{ npc_effective_config.api_endpoint | default('') }}"
-    NPC_API_KEY: "{{ npc_effective_config.app_key | default('') }}"
-    NPC_API_SECRET: "{{ npc_effective_config.app_secret | default('') }}"
-    NPC_ACTION_FORKS: "{{ (npc_setup | default({})).action_focks | default('') }}"
-    NPC_ACTION_TIMEOUT: "{{ (npc_setup | default({})).action_timeout | default('') }}"
-    NPC_ACTION_PULL_SECONDS: "{{ (npc_setup | default({})).action_pull_interval | default('') }}"
-    NPC_ACTION_RETRY_SECONDS: "{{ (npc_setup | default({})).action_retry_interval | default('') }}"
+    NPC_API_ENDPOINT: "{{ npc_effective_config.api_endpoint | default(lookup('env','NPC_API_ENDPOINT')|default('')) }}"
+    NPC_API_KEY: "{{ npc_effective_config.app_key | default(lookup('env','NPC_API_KEY')|default('')) }}"
+    NPC_API_SECRET: "{{ npc_effective_config.app_secret | default(lookup('env','NPC_API_SECRET')|default('')) }}"
+    NPC_ACTION_FORKS: "{{ (npc_setup | default({})).action_focks | default(lookup('env','NPC_ACTION_FORKS')|default('')) }}"
+    NPC_ACTION_TIMEOUT: "{{ (npc_setup | default({})).action_timeout | default(lookup('env','NPC_ACTION_TIMEOUT')|default('')) }}"
+    NPC_ACTION_PULL_SECONDS: "{{ (npc_setup | default({})).action_pull_interval | default(lookup('env','NPC_ACTION_PULL_SECONDS')|default('')) }}"
+    NPC_ACTION_RETRY_SECONDS: "{{ (npc_setup | default({})).action_retry_interval | default(lookup('env','NPC_ACTION_RETRY_SECONDS')|default('')) }}"
   register: npc_execution
   changed_when: false
 

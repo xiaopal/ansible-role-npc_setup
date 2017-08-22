@@ -15,6 +15,10 @@
       default_instance_type:
         cpu: 2
         memory: 4G
+    npc_instance_images:
+      - name: TestImage{1..5}
+        from_instance: tomcat-lb-server
+        present: false
     # 云硬盘
     npc_volumes:
       # 定义三块云硬盘，名称分别为 hd-test-gw,hd-test-a,hd-test-b, 容量100G

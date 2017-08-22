@@ -22,6 +22,7 @@
       set_fact:
         npc_effective_config: "{{ npc_effective_config | default(npc_default_config) | combine(npc_config|default({})) }}"
         npc_resources: "{{ dict(
+            npc_instance_images=npc_instance_images|default(false),
             npc_volumes=npc_volumes|default(false),
             npc_instances=npc_instances|default(false)
           ) }}"

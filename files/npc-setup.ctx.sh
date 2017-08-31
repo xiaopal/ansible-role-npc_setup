@@ -4,14 +4,14 @@ plan_resources(){
 	local STAGE="$1" INPUT_EXPECTED="$2" INPUT_ACTUAL="$3" STAGE_MAPPER="$4"
 	local LINE NAME
 	while read -r LINE; do
-		local NAMES=($(eval "echo $(jq -r '.name|sub("^\\*\\:"; "")'<<<"$LINE")")) NAME_INDEX
+		local NAMES=($(eval "echo $(jq -r '.name|sub("^\\*\\:"; "")'<<<"$LINE")")) NAME_INDEX=0
 		for NAME in "${NAMES[@]}"; do
 			[ ! -z "$NAME" ] || continue
 			while read -r STM_LINE; do 
 				jq_check 'length>1 and (.[1]|strings|startswith("*:"))'<<<"$STM_LINE" || {
 					echo "$STM_LINE" && continue
 				}
-				local STM_VALS=($(eval "echo $(jq -r '.[1]|sub("^\\*\\:"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX
+				local STM_VALS=($(eval "echo $(jq -r '.[1]|sub("^\\*\\:"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX=0
 				for STM_VAL in "${STM_VALS[@]}"; do
 					(( STM_VAL_INDEX++ == NAME_INDEX % ${#STM_VALS[@]} )) \
 						&& STM_VAL="$STM_VAL" jq -c '[.[0],env.STM_VAL]' <<<"$STM_LINE"

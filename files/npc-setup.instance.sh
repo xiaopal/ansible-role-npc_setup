@@ -7,6 +7,10 @@ MAPPER_PRE_LOAD_INSTANCE='{
 		name: .name,
 		status: .status,
 		lan_ip: .vnet_ip,
+
+		inet_ip: (.public_ip//false),
+		corp_ip: (.private_ip//false),
+		
 		actual_volumes: (.uuid as $uuid |.attached_volumes//[]|map({
 			key:.name,
 			value:{
@@ -199,6 +203,20 @@ instances_create(){
 				cpu_weight: .cpu_weight,
 				memory_weight: .memory_weight,
 				ssd_weight: .ssd_weight,
+
+				type: (.instance_type.type//.default_instance_type.type),
+				series: (.instance_type.series//.default_instance_type.series),
+
+				useVPC: (if .vpc_network then true else false end),
+				networkId: (if .vpc_network then .vpc_network else false end),
+				subnetId: (if .vpc_network then .vpc_subnet else false end),
+				securityGroup:(if .vpc_network then .vpc_security_group else false end),
+				usePrivateIP: (if .vpc_network and .vpc_corp then true else false end),
+				useLifeCycleIP: (if .vpc_network and .vpc_inet then true else false end),
+				bandwidth: (if .vpc_network and .vpc_inet then
+						(.vpc_inet_capacity//"1M"|sub("[Mm]$"; "")|tonumber)
+					else false end),
+
 				description: .description
 			} | with_entries(select(.value)))
 		}'<<<"$INSTANCE")"

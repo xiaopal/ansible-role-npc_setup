@@ -80,12 +80,13 @@ init_instances(){
 				else {} end) 
 			|'"$FILTER_PLAN_VOLUMES"'
 			|. + (if .update then {update: false}
-					+ if  .instance_type and .actual_type != .instance_type then
-						{update: true, recreate: true}
-					else {} end
-					+ if .instance_image and .actual_image != .instance_image then
-						{update: true, recreate: true}
-					else {} end
+# do not recreate
+#					+ if  .instance_type and .actual_type != .instance_type then
+#						{update: true, recreate: true}
+#					else {} end
+#					+ if .instance_image and .actual_image != .instance_image then
+#						{update: true, recreate: true}
+#					else {} end
 					+ if .plan_volumes then 
 						# and (.plan_volumes|map(select(.mount or .unmount))|length>0) then
 						{update: true, update_volumes: true}

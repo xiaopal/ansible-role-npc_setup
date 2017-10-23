@@ -50,6 +50,24 @@ FILTER_PLAN_VOLUMES='. + (if .volumes then
 
 init_instances(){
 	local INPUT="$1" STAGE="$2"
+
+	load_instances(){
+		local PAGE_SIZE=50 PAGE_NUM=1
+		while (( PAGE_SIZE > 0 )); do
+			local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
+			while read -r INSTANCE_ENTRY; do
+				PAGE_SIZE=50 && jq -c "select(.)|"'
+					if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
+						(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
+						else . end
+					|'"$MAPPER_PRE_LOAD_INSTANCE"'
+					| if '"$FILTER_INSTANCE_STATUS"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end						
+				'<<<"$INSTANCE_ENTRY"
+			done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
+			(( PAGE_NUM += 1 ))
+		done | jq -sc '.'
+		return 0
+	}
 	jq_check '.npc_instances|arrays' $INPUT && {
 		plan_resources "$STAGE" \
 			<(jq -c '. as $input | .npc_instances | map( . 
@@ -57,14 +75,7 @@ init_instances(){
 				+ ( if env.NPC_SSH_KEY|length>0 then {ssh_keys:((.ssh_keys//[])+[env.NPC_SSH_KEY]|unique)} else {} end )
 				+ ( if env.NPC_SSH_KEY_FILE|length>0 then {default_ssh_key_file: env.NPC_SSH_KEY_FILE} else {} end )
 				)' $INPUT || >>$STAGE.error) \
-			<(npc api 'json.instances | map(
-				if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
-					(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
-					else . end
-				|'"$MAPPER_PRE_LOAD_INSTANCE"'
-				| if '"$FILTER_INSTANCE_STATUS"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end
-				)' GET '/api/v1/vm/allInstanceInfo?pageSize=9999&pageNum=1' \
-				|| >>$STAGE.error) \
+			<(load_instances || >>$STAGE.error) \
 			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:., present: true}})|from_entries)} else {} end)
 			|'"$MAPPER_LOAD_INSTANCE"'
 			|. + (if .wan_ip then
@@ -227,8 +238,6 @@ instances_create(){
 			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
 			&& {
 				echo "[INFO] instance '$INSTANCE_ID' created." >&2 
-				# 等待5秒,期望云主机操作系统起来（否则可能导致绑定云硬盘失败）
-				action_sleep 5s "$CTX" || return 1
 				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
 				instances_wait_instance "$INSTANCE_ID" "$CTX" \
@@ -260,6 +269,8 @@ api_create_instance(){
 instances_update_volumes(){
 	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" MOUNT_FILTER UNMOUNT_FILTER
 	if jq_check '.volumes and (.create or .recreate)'<<<"$INSTANCE"; then
+		# 等待10秒,期望云主机操作系统起来（否则可能导致绑定云硬盘失败）
+		action_sleep 10s "$CTX" || return 1
 		MOUNT_FILTER='select(.present)'
 	elif jq_check '.volumes and .update and .update_volumes'<<<"$INSTANCE"; then
 		INSTANCE="$(instances_wait_instance "$INSTANCE_ID" "$CTX" --stdout \

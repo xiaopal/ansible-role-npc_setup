@@ -61,7 +61,7 @@ init_instances(){
 						(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
 						else . end
 					|'"$MAPPER_PRE_LOAD_INSTANCE"'
-					| if '"$FILTER_INSTANCE_STATUS"' then . else error("\(.name): status=\(.name), lan_ip=\(.lan_ip)") end						
+					| if '"$FILTER_INSTANCE_STATUS"' then . else . + {error: "\(.name): status=\(.status), lan_ip=\(.lan_ip)"} end						
 				'<<<"$INSTANCE_ENTRY"
 			done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
 			(( PAGE_NUM += 1 ))

@@ -7,17 +7,17 @@ NPC_ACTION_PULL_SECONDS=${NPC_ACTION_PULL_SECONDS:-1}
 NPC_ACTION_RETRY_SECONDS=${NPC_ACTION_RETRY_SECONDS:-5}
 
 do_setup(){
-	local ARG INPUT='{}' ACTIONS ACTION_INIT ACTION_SUSPEND ACTION_RESUME ACTION_RESTART ACTION_INIT_SSH_KEY ACTION_OMIT_ABSENT ACTION_FILTER_BY_SSH_KEY
+	local ARG INPUT='{}' ACTIONS ACTION_INIT ACTION_SUSPEND ACTION_RESUME ACTION_RESTART ACTION_INIT_SSH_KEY ACTION_FILTER_BY_SSH_KEY
 	while ARG="$1" && shift; do
 		[ ! -z "$ARG" ] && case "$ARG" in
 			--create|--update|--destroy)
 				ACTIONS="${ACTIONS} ${ARG#--}"
 				;;
-			--omit-absent)
-				ACTION_OMIT_ABSENT='Y'
-				;;
 			--filter-by-ssh-key)
 				ACTION_FILTER_BY_SSH_KEY='Y'
+				;;
+			--omit-absent)
+				:
 				;;
 			--init|--setup)
 				ACTION_INIT='Y'
@@ -87,7 +87,7 @@ do_setup(){
 	}
 	[ ! -z "$NPC_SSH_KEY" ] && NPC_SSH_KEY_FILE="$(cd ~; pwd)/.npc/ssh_key.$NPC_SSH_KEY" && [ -f "$NPC_SSH_KEY_FILE" ] || NPC_SSH_KEY_FILE=
 	export NPC_SSH_KEY NPC_SSH_KEY_FILE
-	[ ! -z "$ACTION_RESUME" ] || export ACTION_OMIT_ABSENT ACTION_FILTER_BY_SSH_KEY
+	[ ! -z "$ACTION_RESUME" ] || export ACTION_FILTER_BY_SSH_KEY
 
 	for RESOURCE in "${NPC_SETUP_RESOURCES[@]}"; do
 		[ ! -z "$ACTION_RESUME" ] || {

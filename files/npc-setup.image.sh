@@ -5,7 +5,7 @@ setup_resources "instance_images"
 init_instance_images(){
 	local INPUT="$1" STAGE="$2"
 	jq_check '.npc_instance_images|arrays' $INPUT && {
-		ACTION_OMIT_ABSENT='Y' plan_resources "$STAGE" \
+		plan_resources "$STAGE" \
 			<(jq -c '.npc_instance_images//[]' $INPUT || >>$STAGE.error) \
 			<(npc api 'json.images|map({
 				id: .imageId,

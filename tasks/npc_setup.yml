@@ -6,12 +6,7 @@
     {% if (npc_setup | default({})).init_ssh_key | default(npc_effective_config.ssh_key|default(false,true) != false) %}
       --init-ssh-key 
     {% endif %}
-    {% if (npc_setup | default({})).absent | default("omit") != "destroy" %}
-      --omit-absent 
-      {% if (npc_setup | default({})).filter_by_ssh_key | default(false) %}
-        --filter-by-ssh-key
-      {% endif %}
-    {% elif (npc_setup | default({})).filter_by_ssh_key | default(true) %}
+    {% if (npc_setup | default({})).filter_by_ssh_key | default(false) %}
       --filter-by-ssh-key
     {% endif %}
     {% for action in npc_actions %}

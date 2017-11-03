@@ -25,7 +25,7 @@ load_volumes(){
 init_volumes(){
 	local INPUT="$1" STAGE="$2"
 	jq_check '.npc_volumes|arrays' $INPUT && {
-		ACTION_OMIT_ABSENT='Y' plan_resources "$STAGE" \
+		plan_resources "$STAGE" \
 			<(jq -c '.npc_volumes//[]' $INPUT || >>$STAGE.error) \
 			<(load_volumes || >>$STAGE.error) \
 			'. + (if .update then {update: false}

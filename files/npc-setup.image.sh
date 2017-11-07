@@ -23,10 +23,7 @@ lookup_from_instance(){
 	}
 	( exec 100>$STAGE.lock && flock 100
 		[ ! -f $STAGE ] && {
-			npc api 'json.instances | map({
-				id: .uuid,
-				name: .name
-			})' GET '/api/v1/vm/allInstanceInfo?pageSize=9999&pageNum=1' >$STAGE || rm -f $STAGE
+			load_instances '{id: .uuid,name: .name}' >$STAGE || rm -f $STAGE
 		}
 	)
 	[ -f $STAGE ] && INSTANCE_NAME="$INSTANCE_NAME" \

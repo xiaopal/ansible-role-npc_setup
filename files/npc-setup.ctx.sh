@@ -222,3 +222,16 @@ checked_api(){
 	[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
 	return 1
 }
+
+
+load_instances(){
+	local PAGE_SIZE=50 PAGE_NUM=1 FILTER="${1:-.}"
+	while (( PAGE_SIZE > 0 )); do
+		local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
+		while read -r INSTANCE_ENTRY; do
+			PAGE_SIZE=50 && jq -c "select(.)|$FILTER"<<<"$INSTANCE_ENTRY"
+		done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
+		(( PAGE_NUM += 1 ))
+	done | jq -sc '.'
+	return 0
+}

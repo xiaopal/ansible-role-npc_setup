@@ -51,23 +51,6 @@ FILTER_PLAN_VOLUMES='. + (if .volumes then
 init_instances(){
 	local INPUT="$1" STAGE="$2"
 
-	load_instances(){
-		local PAGE_SIZE=50 PAGE_NUM=1
-		while (( PAGE_SIZE > 0 )); do
-			local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
-			while read -r INSTANCE_ENTRY; do
-				PAGE_SIZE=50 && jq -c "select(.)|"'
-					if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
-						(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
-						else . end
-					|'"$MAPPER_PRE_LOAD_INSTANCE"'
-					| if '"$FILTER_INSTANCE_STATUS"' then . else . + {error: "\(.name): status=\(.status), lan_ip=\(.lan_ip)"} end						
-				'<<<"$INSTANCE_ENTRY"
-			done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
-			(( PAGE_NUM += 1 ))
-		done | jq -sc '.'
-		return 0
-	}
 	jq_check '.npc_instances|arrays' $INPUT && {
 		plan_resources "$STAGE" \
 			<(jq -c '. as $input | .npc_instances | map( . 
@@ -75,7 +58,13 @@ init_instances(){
 				+ ( if env.NPC_SSH_KEY|length>0 then {ssh_keys:((.ssh_keys//[])+[env.NPC_SSH_KEY]|unique)} else {} end )
 				+ ( if env.NPC_SSH_KEY_FILE|length>0 then {default_ssh_key_file: env.NPC_SSH_KEY_FILE} else {} end )
 				)' $INPUT || >>$STAGE.error) \
-			<(load_instances || >>$STAGE.error) \
+			<(load_instances '
+					if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
+						(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
+						else . end
+					|'"$MAPPER_PRE_LOAD_INSTANCE"'
+					| if '"$FILTER_INSTANCE_STATUS"' then . else . + {error: "\(.name): status=\(.status), lan_ip=\(.lan_ip)"} end						
+				'|| >>$STAGE.error) \
 			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:., present: true}})|from_entries)} else {} end)
 			|'"$MAPPER_LOAD_INSTANCE"'
 			|. + (if .wan_ip then

@@ -62,7 +62,7 @@ volumes_update(){
 		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
-	checked_api PUT "/api/v1/cloud-volumes/$VOLUME_ID/actions/resize?size=$SIZE" \
+	checked_api '{code:status}' '.' PUT "/api/v1/cloud-volumes/$VOLUME_ID/actions/resize?size=$SIZE" >/dev/null \
 		&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	[ ! -z "$MOUNT_INSTANCE_ID" ] && {
 		mount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \

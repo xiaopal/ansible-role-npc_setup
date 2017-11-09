@@ -87,8 +87,7 @@ init_instances(){
 #					+ if .instance_image and .actual_image != .instance_image then
 #						{update: true, recreate: true}
 #					else {} end
-					+ if .plan_volumes then 
-						# and (.plan_volumes|map(select(.mount or .unmount))|length>0) then
+					+ if .plan_volumes and (.plan_volumes|map(select(.mount or .unmount))|length>0) then
 						{update: true, update_volumes: true}
 					else {} end
 					+ if .plan_wan_ip then

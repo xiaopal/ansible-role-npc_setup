@@ -71,11 +71,15 @@
           npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
           ssh_host_by: '{{item.ssh_host_by|default(npc_effective_config.ssh_host_by|default("lan_ip"))}}'
           ssh_jump_host: '{{item.ssh_jump_host|default(npc_effective_config.ssh_jump_host)|default(false,true)}}'
+          ssh_jump_port: '{{item.ssh_jump_port|default(npc_effective_config.ssh_jump_port)|default(false,true)}}'
           ssh_jump_user: '{{item.ssh_jump_user|default(npc_effective_config.ssh_jump_user)|default(false,true)}}'
           ssh_jump_key_file: '{{item.ssh_jump_key_file|default(npc_effective_config.ssh_jump_key_file)|default(false,true)}}'
           npc_jump_vars: '{{npc.instances[ssh_jump_host]|default({})}}'
-          ssh_jump_vars: '{{hostvars[ssh_jump_host]|default({})}}'
+          ssh_jump_vars: '{{hostvars[ssh_jump_host]|default(npc_jump_vars.vars)|default({})}}'
           ssh_jump_args: '{% if ssh_jump_host != false %}-o ProxyCommand="ssh -W %h:%p -q 
+            {% if ssh_jump_port|default(ssh_jump_vars.ansible_port,true)|default(false) %}
+              -p {{ssh_jump_port|default(ssh_jump_vars.ansible_port,true)}}
+            {% endif %}
             {% if npc.instances.has_key(ssh_jump_host) %}
               {% if ssh_jump_key_file|default(npc_jump_vars.ssh_key_file,true)|default(false) %}
                 -i {{ ssh_jump_key_file|default(npc_jump_vars.ssh_key_file,true) }}

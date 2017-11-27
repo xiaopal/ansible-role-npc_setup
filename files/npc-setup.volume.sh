@@ -41,9 +41,10 @@ volumes_create(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
 	local CREATE_VOLUME="$(jq -c '{
 		volume_name: .name,
+		az_name: (.zone//.az),
 		format:(.format//"Raw"),
 		size: (.capacity|sub("[Gg]$"; "")|tonumber)
-	}'<<<"$VOLUME")"
+	}|with_entries(select(.value))'<<<"$VOLUME")"
 	local VOLUME_ID="$(checked_api '.id' POST "/api/v1/cloud-volumes" "$CREATE_VOLUME")" && [ ! -z "$VOLUME_ID" ] \
 		&& volumes_wait_status "$VOLUME_ID" "$CTX" && {
 		echo "[INFO] volume '$VOLUME_ID' created." >&2

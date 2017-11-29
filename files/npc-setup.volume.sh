@@ -122,18 +122,6 @@ volumes_wait_status(){
 	return 1
 }
 
-mount_instance_volume(){
-	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-	checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$VOLUME_UUID"
-	# TODO: handle {"code":"4000797","msg":"Please retry."}	
-}
-
-unmount_instance_volume(){
-	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-	checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmount_volume/$VOLUME_UUID"
-	# TODO: handle {"code":"4000797","msg":"Please retry."}
-}
-
 volumes_lookup(){
 	local VOLUME_NAME="$1" FILTER="$2" STAGE="$NPC_STAGE/volumes.lookup"
 	( exec 100>$STAGE.lock && flock 100
@@ -148,6 +136,18 @@ volumes_lookup(){
 	return 1
 }
 
+mount_instance_volume(){
+	local INSTANCE_ID="$1" VOLUME_UUID="$2"
+	checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$VOLUME_UUID"
+	# TODO: handle {"code":"4000797","msg":"Please retry."}	
+}
+
+unmount_instance_volume(){
+	local INSTANCE_ID="$1" VOLUME_UUID="$2"
+	checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmount_volume/$VOLUME_UUID"
+	# TODO: handle {"code":"4000797","msg":"Please retry."}
+}
+
 volumes_mount(){
 	local INSTANCE_ID="$1" VOLUME_NAME="$2" CTX="$3" WAIT_INSTANCE="$4" \
 		&& [ ! -z "$INSTANCE_ID" ] && [ ! -z "$VOLUME_NAME" ] || return 1
@@ -160,13 +160,16 @@ volumes_mount(){
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
 	while true; do
-		local RESPONSE="$(mount_instance_volume "$INSTANCE_ID" "$MOUNT_VOLUME_UUID")"
+		local RESPONSE="$(npc api --error PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$MOUNT_VOLUME_UUID")"
 		[ "$(jq -r .code <<<"$RESPONSE")" = "200" ] \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" && return 0
 
+		echo "[ERROR] ${RESPONSE:-No response}" >&2
+
 		# {"code":"4000720","msg":"instance status error."}
-		[ "$(jq -r .code <<<"$RESPONSE")" = "4000720" ] \
-			&& action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" && continue
+		[ ! -z "$WAIT_INSTANCE" ] && [ "$(jq -r .code <<<"$RESPONSE")" = "4000720" ] && {
+			action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" && continue
+		}
 
 		return 1
 	done

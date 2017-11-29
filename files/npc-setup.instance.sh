@@ -36,7 +36,7 @@ MAPPER_LOAD_INSTANCE='. + (if .volumes then
 			{wan_ip: .actual_wan_ip} 
 		else {} end)'
 FILTER_LOAD_INSTANCE='select(.)|$instance + .|'"$MAPPER_LOAD_INSTANCE"
-FILTER_INSTANCE_STATUS='.status=="ACTIVE" and .lan_ip'
+FILTER_INSTANCE_STATUS='.lan_ip and (.status=="ACTIVE" or .status=="SHUTOFF")'
 FILTER_PLAN_VOLUMES='. + (if .volumes then
 		{plan_volumes: (
 			(.volumes//{} | with_entries(.value |= . + {actual_present: false}))
@@ -255,10 +255,10 @@ api_create_instance(){
 }
 
 instances_update_volumes(){
-	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" MOUNT_FILTER UNMOUNT_FILTER
+	local INSTANCE_ID="$1" INSTANCE="$2" CTX="$3" MOUNT_FILTER UNMOUNT_FILTER WAIT_INSTANCE
 	if jq_check '.volumes and (.create or .recreate)'<<<"$INSTANCE"; then
-		# 等待10秒,期望云主机操作系统起来（否则可能导致绑定云硬盘失败）
-		action_sleep 10s "$CTX" || return 1
+		# 云主机操作系统未就绪可能导致绑定云硬盘失败
+		WAIT_INSTANCE="Y"
 		MOUNT_FILTER='select(.present)'
 	elif jq_check '.volumes and .update and .update_volumes'<<<"$INSTANCE"; then
 		INSTANCE="$(instances_wait_instance "$INSTANCE_ID" "$CTX" --stdout \
@@ -278,7 +278,7 @@ instances_update_volumes(){
 	}
 	[ ! -z "$MOUNT_FILTER" ] && {
 		while read -r VOLUME_NAME; do
-			volumes_mount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" || return 1
+			volumes_mount "$INSTANCE_ID" "$VOLUME_NAME" "$CTX" "$WAIT_INSTANCE" || return 1
 		done < <(jq -cr ".plan_volumes[]|$MOUNT_FILTER|.name"<<<"$INSTANCE")
 	}
 	return 0

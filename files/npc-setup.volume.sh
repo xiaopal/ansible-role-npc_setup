@@ -37,6 +37,19 @@ init_volumes(){
 	return 0
 }
 
+api_create_volume(){
+	local CREATE_VOLUME="$1"
+	(
+		exec 100>$NPC_STAGE/volumes.create_lock && flock 100
+		local RESPONSE="$(checked_api . POST "/api/v1/cloud-volumes" "$CREATE_VOLUME")" \
+			&& echo "$RESPONSE" \
+			&& [ ! -z "$RESPONSE" ]  \
+			&& local VOLUME_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" \
+			&& [ ! -z "$VOLUME_ID" ] \
+			&& sleep 0.2s || echo "[ERROR] ${RESPONSE:-No response}" >&2
+	)
+}
+
 volumes_create(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
 	local CREATE_VOLUME="$(jq -c '{
@@ -45,12 +58,19 @@ volumes_create(){
 		format:(.format//"Raw"),
 		size: (.capacity|sub("[Gg]$"; "")|tonumber)
 	}|with_entries(select(.value))'<<<"$VOLUME")"
-	local VOLUME_ID="$(checked_api '.id' POST "/api/v1/cloud-volumes" "$CREATE_VOLUME")" && [ ! -z "$VOLUME_ID" ] \
-		&& volumes_wait_status "$VOLUME_ID" "$CTX" && {
-		echo "[INFO] volume '$VOLUME_ID' created." >&2
-		return 0
-	}
-	return 1
+	while true; do
+		local RESPONSE="$(api_create_volume "$CREATE_VOLUME")" && [ ! -z "$RESPONSE" ] \
+			&& local VOLUME_ID="$(jq -r '.id//empty' <<<"$RESPONSE")" && [ ! -z "$VOLUME_ID" ] \
+			&& volumes_wait_status "$VOLUME_ID" "$CTX" && {
+				echo "[INFO] volume '$VOLUME_ID' created." >&2
+				return 0
+			}
+		# {"code":4030001,"msg":"Api freq out of limit."}
+		[ "$(jq -r .code <<<"$RESPONSE")" = "4030001" ] && (
+			exec 100>$NPC_STAGE/volumes.retries && flock 100 \
+				&& action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" ) && continue
+		return 1
+	done
 }
 
 volumes_update(){
@@ -129,7 +149,8 @@ volumes_lookup(){
 }
 
 volumes_mount(){
-	local INSTANCE_ID="$1" VOLUME_NAME="$2" CTX="$3" && [ ! -z "$INSTANCE_ID" ] && [ ! -z "$VOLUME_NAME" ] || return 1
+	local INSTANCE_ID="$1" VOLUME_NAME="$2" CTX="$3" WAIT_INSTANCE="$4" \
+		&& [ ! -z "$INSTANCE_ID" ] && [ ! -z "$VOLUME_NAME" ] || return 1
 	local VOLUME_ID="$(volumes_lookup "$VOLUME_NAME" '.id')" && [ ! -z "$VOLUME_ID" ] || return 1
 	local VOLUME="$(volumes_wait_status "$VOLUME_ID" "$CTX" '.')" && [ ! -z "$VOLUME" ] || return 1
 	local MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")" \
@@ -138,9 +159,17 @@ volumes_mount(){
 		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
-	mount_instance_volume "$INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
-		&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1	
-	return 0
+	while true; do
+		local RESPONSE="$(mount_instance_volume "$INSTANCE_ID" "$MOUNT_VOLUME_UUID")"
+		[ "$(jq -r .code <<<"$RESPONSE")" = "200" ] \
+			&& volumes_wait_status "$VOLUME_ID" "$CTX" && return 0
+
+		# {"code":"4000720","msg":"instance status error."}
+		[ "$(jq -r .code <<<"$RESPONSE")" = "4000720" ] \
+			&& action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" && continue
+
+		return 1
+	done
 }
 
 volumes_unmount(){

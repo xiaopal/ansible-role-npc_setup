@@ -55,6 +55,7 @@ volumes_create(){
 	local CREATE_VOLUME="$(jq -c '{
 		volume_name: .name,
 		az_name: (.zone//.az),
+		type: .type,
 		format:(.format//"Raw"),
 		size: (.capacity|sub("[Gg]$"; "")|tonumber)
 	}|with_entries(select(.value))'<<<"$VOLUME")"

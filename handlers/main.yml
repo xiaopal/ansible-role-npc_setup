@@ -1,5 +1,0 @@
----
-- name: resume npc_setup
-  vars:
-    npc_actions: "{{ ((npc_setup | default({})).actions | default([])) + ['resume'] }}"
-  include: npc_setup.yml

@@ -11,30 +11,99 @@
       with_fileglob:
         - npc-setup.sh
         - npc-playbook.sh
-    - vars:
-        npc_default_config:
-          app_key:
-          app_secret:
-          default_instance_image: 
-          default_instance_type:
-            cpu: 2
-            memory: 4G   
-      set_fact:
-        npc_effective_config: "{{ npc_effective_config | default(npc_default_config) | combine(npc_config|default({})) }}"
-        npc_resources: "{{ dict(
-            npc_instance_images=npc_instance_images|default(false),
-            npc_volumes=npc_volumes|default(false),
-            npc_instances=npc_instances|default(false)
-          ) }}"
 
-- name: setup
+- name: npc setup
+  shell: npc setup
+    {% if npc_setup_effective.init_ssh_key %}
+      --init-ssh-key 
+    {% endif %}
+    {% for action in npc_setup_effective.actions %}
+      --{{ action }}
+    {% endfor %}
+    {{ npc_setup_resources | to_json | quote }}
+    {% if npc_setup_effective.log | length > 0 %}
+      2>> {{ npc_setup_effective.log | quote }}
+    {% endif %}
+  args:
+    executable: /bin/bash
+  environment:
+    NPC_API_ENDPOINT: "{{ npc_setup_effective.api_endpoint }}"
+    NPC_API_KEY: "{{ npc_setup_effective.app_key }}"
+    NPC_API_SECRET: "{{ npc_setup_effective.app_secret }}"
+    NPC_ACTION_FORKS: "{{ npc_setup_effective.action_focks }}"
+    NPC_ACTION_TIMEOUT: "{{ npc_setup_effective.action_timeout }}"
+    NPC_ACTION_PULL_SECONDS: "{{ npc_setup_effective.action_pull_interval }}"
+    NPC_ACTION_RETRY_SECONDS: "{{ npc_setup_effective.action_retry_interval }}"
+  register: npc_execution
+  changed_when: false
+
+- name: export 'npc'
+  set_fact:
+    npc: "{{ npc_execution.stdout | from_json }}"
+
+- name: summary
+  debug: 
+    msg: npc_setup - 
+      {% if npc.changing %}
+      {{npc.creating|default([])|length}} creating, 
+      {{npc.updating|default([])|length}} updating, 
+      {{npc.destroying|default([])|length}} destroying,
+      {% else %}
+        0 changing,
+      {% endif %}
+      {% if npc.changed %}
+      {{npc.created|default([])|length}} created, 
+      {{npc.updated|default([])|length}} updated, 
+      {{npc.destroyed|default([])|length}} destroyed.
+      {% else %}
+        0 changed.
+      {% endif %}
+  changed_when: npc.changed
+
+- name: register hosts
+  when:
+    - npc.instances is defined
+    - npc_setup_effective.add_hosts
   block:
-    - include: npc_setup.yml
+    - name: add hosts
+      with_items: "{{ npc.instances.values() }}"
       vars:
-        npc_actions: '{{ (npc_setup | default({})).staging | default(false) | ternary(["init","suspend"], (npc_setup | default({})).actions | default([])) }}'
-
-    - name: notify to resume npc_setup
-      when: (npc_setup | default({})).staging | default(false)
-      debug: msg='npc.changing={{npc.changing}}'
-      notify: resume npc_setup
-      changed_when: true
+          npc_change_group: '{{npc_setup_effective.group_by[item.change_action|default("none", true)]|default("", true)}}'
+          npc_all_group: '{{npc_setup_effective.group_by["all"]|default("", true)}}'
+          npc_groups: '{{ ((npc_all_group | length > 0) | ternary([npc_all_group],[])) + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
+          ssh_host_by: '{{item.ssh_host_by|default(npc_setup_effective.ssh_host_by, true)}}'
+          ssh_jump_host: '{{item.ssh_jump_host|default(npc_setup_effective.ssh_jump_host, true)}}'
+          ssh_jump_port: '{{item.ssh_jump_port|default(npc_setup_effective.ssh_jump_port, true)}}'
+          ssh_jump_user: '{{item.ssh_jump_user|default(npc_setup_effective.ssh_jump_user, true)}}'
+          ssh_jump_key_file: '{{ item.ssh_jump_key_file | default(npc_setup_effective.ssh_jump_key_file, true) }}'
+          npc_jump_vars: '{{npc.instances[ssh_jump_host]|default({})}}'
+          ssh_jump_vars: '{{hostvars[ssh_jump_host]|default(npc_jump_vars.vars)|default({})}}'
+          ssh_jump_args: '{% if ssh_jump_host != false %}-o ProxyCommand="ssh -W %h:%p -q 
+            {% if ssh_jump_port|default(ssh_jump_vars.ansible_port,true)|default(false) %}
+              -p {{ssh_jump_port|default(ssh_jump_vars.ansible_port,true)}}
+            {% endif %}
+            {% if npc.instances.has_key(ssh_jump_host) %}
+              {% if ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) | default(false) %}
+                -i {{ ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) }}
+              {% endif %}
+              {% if ssh_jump_user|default(npc_jump_vars.ssh_user,true)|default(false) %}{{ssh_jump_user|default(npc_jump_vars.ssh_user,true)}}@{% endif %}{{npc_jump_vars[npc_jump_vars.ssh_host_by|default(npc_setup_effective.ssh_host_by, true)]}}
+            {% else %}
+              {% if ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) | default(false) %}
+                -i {{ ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) }}
+              {% endif %}
+              {% if ssh_jump_user|default(ssh_jump_vars.ansible_user,true)|default(false) %}{{ssh_jump_user|default(ssh_jump_vars.ansible_user,true)}}@{% endif %}{{ssh_jump_vars.ansible_host|default(ssh_jump_host)}}
+            {% endif %}"{% endif %}'
+      add_host: 
+      args: '{{ dict(
+          hostname=item.name,
+          groups=( npc_setup_effective.groups + (item.groups | default([])) + npc_groups ),
+          ansible_host=item[ssh_host_by],
+          ansible_user=(item.ssh_user|default(omit)),
+          ansible_ssh_common_args=((ssh_jump_host != false)|ternary(ssh_jump_args, omit) ),
+          ansible_ssh_private_key_file=(item.ssh_key_file|default(omit)),
+          npc_instance=item
+          ) | combine( npc_setup_effective.vars, item.vars|default({},true) ) }}'
+      changed_when: false
+    - name: summary
+      debug: 
+        msg: "{{npc.instances|length}} instances registered: {{npc.instances.keys()|join(', ')}}"

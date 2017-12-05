@@ -29,9 +29,7 @@ MAPPER_PRE_LOAD_INSTANCE='{
 MAPPER_LOAD_INSTANCE='. + (if .volumes then
 			{volumes: ((.volumes//{}) * (.actual_volumes//{})|with_entries(select(.value.present)))}
 		else {} end)
-	| . + (if .missing_ssh_key|not then
-			{ssh_key_file:(.ssh_key_file//.default_ssh_key_file)} 
-		else {} end)
+	| . + {ssh_key_file:(.ssh_key_file//.default_ssh_key_file)}
 	| . + (if (.wan_ip=="new" or .wan_ip==true or .wan_ip=="any") and .actual_wan_ip then 
 			{wan_ip: .actual_wan_ip} 
 		else {} end)'
@@ -54,15 +52,10 @@ init_instances(){
 	jq_check '.npc_instances|arrays' $INPUT && {
 		plan_resources "$STAGE" \
 			<(jq -c '. as $input | .npc_instances | map( . 
-				+ {default_instance_image: $input.npc_instance_image, default_instance_type: $input.npc_instance_type}
 				+ ( if env.NPC_SSH_KEY|length>0 then {ssh_keys:((.ssh_keys//[])+[env.NPC_SSH_KEY]|unique)} else {} end )
 				+ ( if env.NPC_SSH_KEY_FILE|length>0 then {default_ssh_key_file: env.NPC_SSH_KEY_FILE} else {} end )
 				)' $INPUT || >>$STAGE.error) \
-			<(load_instances '
-					if (env.NPC_SSH_KEY|length==0) or (try .properties|fromjson["publicKeys"]|split(",")|contains([env.NPC_SSH_KEY])|not) then 
-						(select(env.ACTION_FILTER_BY_SSH_KEY|length==0)|. + {missing_ssh_key: true})
-						else . end
-					|'"$MAPPER_PRE_LOAD_INSTANCE"'
+			<(load_instances "$MAPPER_PRE_LOAD_INSTANCE"'
 					| if '"$FILTER_INSTANCE_STATUS"' then . else . + {error: "\(.name): status=\(.status), lan_ip=\(.lan_ip)"} end						
 				'|| >>$STAGE.error) \
 			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:., present: true}})|from_entries)} else {} end)
@@ -171,11 +164,7 @@ instances_prepare(){
 	IMAGE_ID="$IMAGE_ID" \
 	jq -c '. + {
 		prepared: true,
-		image_id: env.IMAGE_ID,
-		cpu_weight: (.instance_type.cpu//.default_instance_type.cpu//2),
-		memory_weight: ((.instance_type.memory//.default_instance_type.memory//"4G")|sub("[Gg]$"; "")|tonumber),
-		ssd_weight: 20,
-		description:"created by npc-setup"
+		instance_image_id: env.IMAGE_ID
 	}'"+$WAN_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
@@ -199,11 +188,10 @@ instances_create(){
 				azCode: (.zone//.az),
 				instance_name: .name,
 				ssh_key_names: (.ssh_keys//[]),
-				image_id: .image_id,
-				cpu_weight: .cpu_weight,
-				memory_weight: .memory_weight,
-				ssd_weight: .ssd_weight,
-
+				image_id: .instance_image_id,
+				cpu_weight: (.instance_type.cpu//0),
+				memory_weight: ((.instance_type.memory//"0G")|sub("[Gg]$"; "")|tonumber),
+				ssd_weight: ((.instance_type.ssd//"20G")|sub("[Gg]$"; "")|tonumber),
 				type: (.instance_type.type//.default_instance_type.type),
 				series: (.instance_type.series//.default_instance_type.series),
 
@@ -217,7 +205,7 @@ instances_create(){
 						(.vpc_inet_capacity//"1M"|sub("[Mm]$"; "")|tonumber)
 					else false end),
 
-				description: .description
+				description: (.description//"created by npc-setup")
 			} | with_entries(select(.value)))
 		}'<<<"$INSTANCE")"
 	while true; do

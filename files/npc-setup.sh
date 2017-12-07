@@ -135,6 +135,8 @@ SCRIPT_DIR="$(cd "$(dirname $SCRIPT)"; pwd)"
 . $SCRIPT_DIR/npc-setup.ctx.sh \
 	&& . $SCRIPT_DIR/npc-setup.ssh_key.sh \
 	&& . $SCRIPT_DIR/npc-setup.image.sh \
+	&& . $SCRIPT_DIR/npc-setup.vpc.sh \
 	&& . $SCRIPT_DIR/npc-setup.volume.sh \
 	&& . $SCRIPT_DIR/npc-setup.instance.sh \
+	&& . $SCRIPT_DIR/npc-setup.vpc_route.sh \
 	&& do_setup "$@"

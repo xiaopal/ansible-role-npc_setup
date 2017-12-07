@@ -22,8 +22,11 @@ check_ssh_keys(){
 	while read -r SSH_KEY; do
 		( exec 100>$STAGE.lock && flock 100
 			[ -f $STAGE ] || {
-				npc api 'json|arrays|map({key:.name, value:.})|from_entries' \
-					GET "/api/v1/secret-keys" >$STAGE || { rm -f $STAGE; exit 1; }				
+				npc api --error GET "/api/v1/secret-keys" \
+					| jq -ce 'arrays//(objects|select(.code==4040005)|[])
+						|map({key:.name, value:.})|from_entries' >$STAGE \
+					&& [ -s $STAGE ] \
+					|| { rm -f $STAGE; exit 1; }
 			}
 			local STAGE_SSH_KEY="$(jq -c --arg ssh_key "$SSH_KEY" '.[$ssh_key]//empty' $STAGE)" \
 				SSH_KEY_FILE="$(cd ~; pwd)/.npc/ssh_key.$SSH_KEY"

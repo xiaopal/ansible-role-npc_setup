@@ -26,6 +26,15 @@ do_playbook(){
 			}
 			echo "$SETUP_PLAYBOOK_YAML">"$SETUP_PLAYBOOK" && ARGS=("${ARGS[@]}" "$SETUP_PLAYBOOK")
 			;;
+		--var-files)
+			local VAR_FILES="$1" && shift
+			for VAR_FILE in $( IFS=': '
+				for FILE in $VAR_FILES; do 
+					[ ! -z "$FILE" ] && [ -f "$FILE" ] && echo "$FILE"
+				done | sort -u ); do
+				[ ! -z "$VAR_FILE" ] && ARGS=("${ARGS[@]}" -e "@$VAR_FILE")
+			done
+			;;
 		*)
 			ARGS=("${ARGS[@]}" "$ARG")
 			;;

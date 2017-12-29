@@ -168,10 +168,13 @@ volumes_mount(){
 		echo "[ERROR] ${RESPONSE:-No response}" >&2
 
 		# {"code":"4000720","msg":"instance status error."}
-		[ ! -z "$WAIT_INSTANCE" ] && [ "$(jq -r .code <<<"$RESPONSE")" = "4000720" ] && {
+		# {"code":"4000799","msg":"UNKNOWN error."}
+		local ERROR_CODE="$(jq -r .code <<<"$RESPONSE")"
+		[ ! -z "$WAIT_INSTANCE" ] && (
+			[ "$ERROR_CODE" = "4000720" ] || [ "$ERROR_CODE" = "4000799" ]
+			) && {
 			action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" && continue
 		}
-
 		return 1
 	done
 }

@@ -120,33 +120,20 @@ report_resources(){
 
 apply_actions(){
 	local ACTION="$1" INPUT="$2" RESULT="$3" FORK=0 && [ -f $INPUT ] || return 0
-	do_wait(){
-		wait && [ -f $RESULT ] || return 1
-		for I in $(seq 0 "$((FORK-1))"); do
-			[ -f $RESULT.$I ] && jq -ce '.' $RESULT.$I >> $RESULT || {
-				rm -f $RESULT
-				return 1
-			}
-		done
-	}
-	touch $RESULT && while read -r ACTION_ITEM; do
-		rm -f $RESULT.$FORK && touch $RESULT
-		{ 
-			$ACTION "$ACTION_ITEM" "$RESULT.$FORK" "$SECONDS $RESULT" && {
-				[ -f "$RESULT.$FORK" ] || echo "$ACTION_ITEM" >"$RESULT.$FORK"
-			} || {
-				rm -f "$RESULT.$FORK"
-				rm -f $RESULT
-			}
-		}&
-		((++FORK >= ${NPC_ACTION_FORKS:-1})) && {
-			do_wait || return 1
-			FORK=0
-		}
-	done <$INPUT
-	do_wait || return 1
-	rm -f $RESULT.*
-	return 0
+	touch $RESULT && ( exec 99<$INPUT
+		for FORK in $(seq 1 ${NPC_ACTION_FORKS:-1}); do
+			[ ! -z "$FORK" ] && rm -f $RESULT.$FORK || continue
+			while [ -f $RESULT ]; do
+				flock 99 && read -r ACTION_ITEM <&99 && flock -u 99 || break
+				$ACTION "$ACTION_ITEM" "$RESULT.$FORK" "$SECONDS $RESULT" && {
+					[ -f "$RESULT.$FORK" ] || echo "$ACTION_ITEM" >"$RESULT.$FORK"
+					flock 99 && jq -ce '.' $RESULT.$FORK >>$RESULT && flock -u 99 && continue
+				}
+				rm -f "$RESULT.$FORK"; rm -f $RESULT; break
+			done &
+		done; wait )
+	[ -f $RESULT ] && rm -f $RESULT.* && return 0
+	return 1
 }
 
 time_to_seconds(){

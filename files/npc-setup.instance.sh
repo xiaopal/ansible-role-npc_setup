@@ -160,12 +160,27 @@ instances_prepare(){
 		wan_id: ($acquired.id//.wan_id//.actual_wan_id),
 		wan_capacity: (.wan_capacity//.actual_wan_capacity)
 	} | select(.wan_ip)//{}'<<<"$INSTANCE")"
+
+	local VPC_CONFIG="{}" VPC_NETWORK VPC_SUBNET VPC_SECURITY_GROUP
+	jq_check '.vpc_network'<<<"$INSTANCE" && {
+		VPC_NETWORK="$(vpc_networks_lookup "$(jq -r '.vpc_network//empty'<<<"$INSTANCE")")" \
+			&& [ ! -z "$VPC_NETWORK" ] || return 1
+		VPC_SUBNET="$(vpc_subnets_lookup "$(jq -r '.vpc_subnet//empty'<<<"$INSTANCE")" "$VPC_NETWORK")" \
+			&& [ ! -z "$VPC_SUBNET" ] || return 1
+		VPC_SECURITY_GROUP="$(vpc_security_groups_lookup "$(jq -r '.vpc_security_group//empty'<<<"$INSTANCE")" "$VPC_NETWORK")" \
+			&& [ ! -z "$VPC_SECURITY_GROUP" ] || return 1
+		VPC_CONFIG="$(export VPC_NETWORK VPC_SUBNET VPC_SECURITY_GROUP; jq -nc '{
+			vpc_network: env.VPC_NETWORK,
+			vpc_subnet: env.VPC_SUBNET,
+			vpc_security_group: env.VPC_SECURITY_GROUP
+			}')"
+	}
 	
 	IMAGE_ID="$IMAGE_ID" \
 	jq -c '. + {
 		prepared: true,
 		instance_image_id: env.IMAGE_ID
-	}'"+$WAN_CONFIG"<<<"$INSTANCE" && return 0 || return 1
+	}'"+$WAN_CONFIG""+$VPC_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
 instances_wait_instance(){
@@ -237,8 +252,9 @@ api_create_instance(){
 			&& echo "$RESPONSE" \
 			&& [ ! -z "$RESPONSE" ]  \
 			&& local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" \
-			&& [ ! -z "$INSTANCE_ID" ] \
-			&& sleep 1s; # 等待1秒,避免 Api freq out of limit
+			&& [ ! -z "$INSTANCE_ID" ] 
+			# \
+			#&& sleep 1s; # 等待1秒,避免 Api freq out of limit
 	)	
 }
 

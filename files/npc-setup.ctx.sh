@@ -1,8 +1,31 @@
 #! /bin/bash
 
-plan_resources(){
-	local STAGE="$1" INPUT_EXPECTED="$2" INPUT_ACTUAL="$3" STAGE_MAPPER="$4"
-	local LINE NAME
+jq_check(){
+	local ARGS=() ARG OUTPUT
+	while ARG="$1" && shift; do
+		case "$ARG" in
+		--out|--output)
+			OUTPUT="$1" && shift
+			;;
+		--stdout)
+			OUTPUT="/dev/fd/1"
+			;;
+		--stderr)
+			OUTPUT="/dev/fd/2"
+			;;
+		*)
+			ARGS=("${ARGS[@]}" "$ARG")
+			;;
+		esac
+	done
+	local CHECK_RESULT="$(jq "${ARGS[@]}")" && [ ! -z "$CHECK_RESULT" ] \
+		&& jq -cre 'select(.)'<<<"$CHECK_RESULT" >${OUTPUT:-/dev/null} && return 0
+	[ ! -z "$OUTPUT" ] && [ -f "$OUTPUT" ] && rm -f "$OUTPUT"
+	return 1
+}
+
+expand_resources(){
+	local LINE NAME FILTER="${1:-.}"
 	while read -r LINE; do
 		local NAMES=($(eval "echo $(jq -r '.name|sub("^\\*\\:"; "")'<<<"$LINE")")) NAME_INDEX=0
 		for NAME in "${NAMES[@]}"; do
@@ -19,8 +42,13 @@ plan_resources(){
 			done < <(NAME="$NAME" jq --argjson index "$((NAME_INDEX))" -c '. + {name:env.NAME, name_index:$index}|tostream'<<<"$LINE") \
 				| jq -s 'fromstream(.[])'; ((NAME_INDEX++))
 		done
-	done < <(jq -c 'arrays[]' $INPUT_EXPECTED || >>$STAGE.error) \
-		| jq -sc 'map({ key:.name, value:. }) | from_entries' >$STAGE.expected \
+	done < <(jq -c 'arrays[]') | jq -sc "$FILTER"
+}
+
+plan_resources(){
+	local STAGE="$1" INPUT_EXPECTED="$2" INPUT_ACTUAL="$3" STAGE_MAPPER="$4"
+	(jq -e 'arrays' $INPUT_EXPECTED || >>$STAGE.error) \
+		| expand_resources 'map({ key:.name, value:. }) | from_entries' >$STAGE.expected \
 		&& [ ! -f $STAGE.error ] && jq_check 'objects' $STAGE.expected \
 		&& jq -c 'arrays| map({ key:.name, value:. }) | from_entries' $INPUT_ACTUAL >$STAGE.actual \
 		&& [ ! -f $STAGE.error ] && jq_check 'objects' $STAGE.actual \
@@ -164,42 +192,20 @@ action_sleep(){
 	done; return 1
 }
 
-jq_check(){
-	local ARGS=() ARG OUTPUT
-	while ARG="$1" && shift; do
-		case "$ARG" in
-		--out|--output)
-			OUTPUT="$1" && shift
-			;;
-		--stdout)
-			OUTPUT="/dev/fd/1"
-			;;
-		--stderr)
-			OUTPUT="/dev/fd/2"
-			;;
-		*)
-			ARGS=("${ARGS[@]}" "$ARG")
-			;;
-		esac
-	done
-	local CHECK_RESULT="$(jq "${ARGS[@]}")" && [ ! -z "$CHECK_RESULT" ] \
-		&& jq -cre 'select(.)'<<<"$CHECK_RESULT" >${OUTPUT:-/dev/null} && return 0
-	[ ! -z "$OUTPUT" ] && [ -f "$OUTPUT" ] && rm -f "$OUTPUT"
-	return 1
-}
-
 checked_api(){
 	local FILTER ARGS=(); while ! [[ "$1" =~ ^(GET|POST|PUT|DELETE|HEAD)$ ]]; do
 		[ ! -z "$FILTER" ] && ARGS=("${ARGS[@]}" "$FILTER")
 		FILTER="$1" && shift
 	done; ARGS=("${ARGS[@]}" "$@")
-	local RESPONSE="$(npc api --error "${ARGS[@]}")" && [ ! -z "$RESPONSE" ] || {
+	local RESPONSE="$(npc ${CHECK_API:-api} --error "${ARGS[@]}")" && [ ! -z "$RESPONSE" ] || {
 		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] No response." >&2
 		return 1
 	}
-	jq_check .code <<<"$RESPONSE" && [ "$(jq -r .code <<<"$RESPONSE")" != "200" ] && {
-		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
-		return 1
+	[ "${CHECK_API:-api}" == "api" ] && {
+		jq_check .code <<<"$RESPONSE" && [ "$(jq -r .code <<<"$RESPONSE")" != "200" ] && {
+			[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
+			return 1
+		}
 	}
 	if [ ! -z "$FILTER" ]; then
 		jq -ce "($FILTER)//empty" <<<"$RESPONSE" && return 0
@@ -210,6 +216,9 @@ checked_api(){
 	return 1
 }
 
+checked_api2(){
+	CHECK_API=api2 checked_api "$@"
+}
 
 load_instances(){
 	local PAGE_SIZE=50 PAGE_NUM=1 FILTER="${1:-.}"

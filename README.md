@@ -142,6 +142,7 @@ npc_volumes:
     capacity: 10G
 npc_instances:
   - name: test-vm
+    instance_type: {cpu: 2, memory: 4G}
     instance_image: Debian 8.6
     ssh_keys:
       - Xiaohui-GRAYPC 
@@ -158,6 +159,57 @@ npc_volumes:
 npc_instances:
   - name: test-vm
     present: false
+EOF
+
+```
+
+## 支持VPC (NEW)
+```
+# npc playbook --setup <<EOF
+---
+npc_ssh_key: { name: test-ssh-key }
+
+npc_instances:
+  - name: vpc-instance-01
+    zone: cn-east-1b
+    instance_type: {series: 2, type: 2, cpu: 4, memory: 8G}
+    instance_image: Debian 8.6
+    vpc: test-vpc
+    vpc_subnet: default
+    vpc_security_group: test_group
+    vpc_inet: yes
+    vpc_inet_capacity: 10m
+
+npc_vpc_networks:
+  - name: test-vpc
+    cidr: 10.177.0.0/16
+
+npc_vpc_subnets:
+  - subnet: default/10.177.231.0/24 @test-vpc
+    zone: cn-east-1b
+  - subnet: 10.177.232.0/24 @test-vpc
+    zone: cn-east-1b
+
+npc_vpc_security_groups:
+  - security_group: test_group @test-vpc
+  - security_group: unuse_group @test-vpc
+    present: no
+
+npc_vpc_security_group_rules:
+  - rule: ingress, 0.0.0.0/0, icmp @test_group @test-vpc
+  - rule: ingress, default, all @test_group @test-vpc
+  - rule: ingress, 10.0.0.0/8, {icmp,tcp/22,tcp/80,tcp/443,tcp/8000-9000} @test_group @test-vpc
+  - rule: egress, 10.0.0.1, tcp/80-90 @test_group @test-vpc
+    present: no
+
+npc_vpc_route_tables:
+  - route_table: main_route_table @test-vpc
+  - route_table: test_table @test-vpc
+
+npc_vpc_routes:
+  - route: 192.168.99.0/24 @{main_route_table,test_table} @test-vpc
+    via_instance: vpc-instance-01
+
 EOF
 
 ```

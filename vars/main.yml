@@ -6,6 +6,7 @@ npc_setup_resources:
   npc_vpc_networks: '{{ npc_setup_effective.vpc_networks | default(npc_vpc_networks, true) | default(false) }}'
   npc_vpc_subnets: '{{ npc_setup_effective.vpc_subnets | default(npc_vpc_subnets, true) | default(false) }}'
   npc_vpc_security_groups: '{{ npc_setup_effective.vpc_security_groups | default(npc_vpc_security_groups, true) | default(false) }}'
+  npc_vpc_security_group_rules: '{{ npc_setup_effective.vpc_security_group_rules | default(npc_vpc_security_group_rules, true) | default(false) }}'
   npc_vpc_route_tables: '{{ npc_setup_effective.vpc_route_tables | default(npc_vpc_route_tables, true) | default(false) }}'
   npc_instance_images: '{{ npc_setup_effective.instance_images | default(npc_instance_images, true) | default(false) }}'
   npc_volumes: '{{ npc_setup_effective.volumes | default(npc_volumes, true) | default(false) }}'

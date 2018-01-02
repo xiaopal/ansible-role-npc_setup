@@ -35,7 +35,7 @@ lookup_from_instance(){
 
 instance_images_create(){
 	local IMAGE="$1" RESULT="$2" CTX="$3" && [ ! -z "$IMAGE" ] || return 1
-	local FROM_INSTANCE="$(lookup_from_instance "$(jq -r '.from_instance//empty'<<<"$IMAGE")")" \
+	local FROM_INSTANCE="$(INSTANCES_LOOKUP_KEY='from_instances' instances_lookup "$(jq -r '.from_instance//empty'<<<"$IMAGE")")" \
 		&& [ ! -z "$FROM_INSTANCE" ] || return 1
 	local SAVE_IMAGE="$(FROM_INSTANCE="$FROM_INSTANCE" jq -c '{
 		name: .name,

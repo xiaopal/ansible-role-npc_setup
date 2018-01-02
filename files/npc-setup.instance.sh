@@ -162,8 +162,8 @@ instances_prepare(){
 	} | select(.wan_ip)//{}'<<<"$INSTANCE")"
 
 	local VPC_CONFIG="{}" VPC_NETWORK VPC_SUBNET VPC_SECURITY_GROUP
-	jq_check '.vpc_network'<<<"$INSTANCE" && {
-		VPC_NETWORK="$(vpc_networks_lookup "$(jq -r '.vpc_network//empty'<<<"$INSTANCE")")" \
+	jq_check '.vpc_network//.vpc'<<<"$INSTANCE" && {
+		VPC_NETWORK="$(vpc_networks_lookup "$(jq -r '.vpc_network//.vpc//empty'<<<"$INSTANCE")")" \
 			&& [ ! -z "$VPC_NETWORK" ] || return 1
 		VPC_SUBNET="$(vpc_subnets_lookup "$(jq -r '.vpc_subnet//empty'<<<"$INSTANCE")" "$VPC_NETWORK")" \
 			&& [ ! -z "$VPC_SUBNET" ] || return 1
@@ -347,4 +347,30 @@ instances_destroy(){
 		return 0
 	}
 	return 1
+}
+
+load_instances(){
+	local PAGE_SIZE=50 PAGE_NUM=1 FILTER="${1:-.}"
+	while (( PAGE_SIZE > 0 )); do
+		local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
+		while read -r INSTANCE_ENTRY; do
+			PAGE_SIZE=50 && jq -c "select(.)|$FILTER"<<<"$INSTANCE_ENTRY"
+		done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
+		(( PAGE_NUM += 1 ))
+	done | jq -sc '.'
+	return 0
+}
+
+instances_lookup(){
+	local INSTANCE="$1" FILTER="${2:-.id}" STAGE="$NPC_STAGE/${INSTANCES_LOOKUP_KEY:-instances}.lookup"
+	( exec 100>$STAGE.lock && flock 100
+		[ ! -f $STAGE ] && {
+			load_instances '{id: .uuid,name: .name}' >$STAGE || rm -f $STAGE
+		}
+	)
+ 	[ ! -z "$INSTANCE" ] && [ -f $STAGE ] && INSTANCE="$INSTANCE" \
+ 		jq_check --stdout '.[]|select(.id == env.INSTANCE or .name == env.INSTANCE)|'"$FILTER" $STAGE	\
+ 		&& return 0
+ 	echo "[ERROR] instance '$INSTANCE' not found" >&2
+ 	return 1
 }

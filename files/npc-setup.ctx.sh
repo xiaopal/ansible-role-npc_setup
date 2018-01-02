@@ -25,22 +25,22 @@ jq_check(){
 }
 
 expand_resources(){
-	local LINE NAME FILTER="${1:-.}"
+	local LINE KEY FILTER="${1:-.}" KEY_ATTR="${EXPAND_KEY_ATTR:-name}"
 	while read -r LINE; do
-		local NAMES=($(eval "echo $(jq -r '.name|sub("^\\*\\:"; "")'<<<"$LINE")")) NAME_INDEX=0
-		for NAME in "${NAMES[@]}"; do
-			[ ! -z "$NAME" ] || continue
+		local KEYS=($(eval "echo $(jq -r ".$KEY_ATTR"'|gsub("^\\*\\:|[\\s\\$]"; "")'<<<"$LINE")")) KEY_INDEX=0
+		for KEY in "${KEYS[@]}"; do
+			[ ! -z "$KEY" ] || continue
 			while read -r STM_LINE; do 
 				jq_check 'length>1 and (.[1]|strings|startswith("*:"))'<<<"$STM_LINE" || {
 					echo "$STM_LINE" && continue
 				}
-				local STM_VALS=($(eval "echo $(jq -r '.[1]|sub("^\\*\\:"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX=0
+				local STM_VALS=($(eval "echo $(jq -r '.[1]|gsub("^\\*\\:|[\\s\\$]"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX=0
 				for STM_VAL in "${STM_VALS[@]}"; do
-					(( STM_VAL_INDEX++ == NAME_INDEX % ${#STM_VALS[@]} )) \
+					(( STM_VAL_INDEX++ == KEY_INDEX % ${#STM_VALS[@]} )) \
 						&& STM_VAL="$STM_VAL" jq -c '[.[0],env.STM_VAL]' <<<"$STM_LINE"
 				done 
-			done < <(NAME="$NAME" jq --argjson index "$((NAME_INDEX))" -c '. + {name:env.NAME, name_index:$index}|tostream'<<<"$LINE") \
-				| jq -s 'fromstream(.[])'; ((NAME_INDEX++))
+			done < <(KEY="$KEY" jq --argjson index "$((KEY_INDEX))" -c ". + {$KEY_ATTR:env.KEY, ${KEY_ATTR}_index:\$index}|tostream"<<<"$LINE") \
+				| jq -s 'fromstream(.[])'; ((KEY_INDEX++))
 		done
 	done < <(jq -c 'arrays[]') | jq -sc "$FILTER"
 }
@@ -48,7 +48,7 @@ expand_resources(){
 plan_resources(){
 	local STAGE="$1" INPUT_EXPECTED="$2" INPUT_ACTUAL="$3" STAGE_MAPPER="$4"
 	(jq -e 'arrays' $INPUT_EXPECTED || >>$STAGE.error) \
-		| expand_resources 'map({ key:.name, value:. }) | from_entries' >$STAGE.expected \
+		| EXPAND_KEY_ATTR='name' expand_resources 'map({ key:.name, value:. }) | from_entries' >$STAGE.expected \
 		&& [ ! -f $STAGE.error ] && jq_check 'objects' $STAGE.expected \
 		&& jq -c 'arrays| map({ key:.name, value:. }) | from_entries' $INPUT_ACTUAL >$STAGE.actual \
 		&& [ ! -f $STAGE.error ] && jq_check 'objects' $STAGE.actual \
@@ -197,11 +197,14 @@ checked_api(){
 		[ ! -z "$FILTER" ] && ARGS=("${ARGS[@]}" "$FILTER")
 		FILTER="$1" && shift
 	done; ARGS=("${ARGS[@]}" "$@")
-	local RESPONSE="$(npc ${CHECK_API:-api} --error "${ARGS[@]}")" && [ ! -z "$RESPONSE" ] || {
+
+	local DO_API=(npc ${NPC_API:-api})
+	[ ! -z "$NPC_API_LOCK" ] && DO_API=('flock' "$NPC_API_LOCK" "${DO_API[@]}")
+	local RESPONSE="$("${DO_API[@]}" --error "${ARGS[@]}")" && [ ! -z "$RESPONSE" ] || {
 		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] No response." >&2
 		return 1
 	}
-	[ "${CHECK_API:-api}" == "api" ] && {
+	[ "${NPC_API:-api}" == "api" ] && {
 		jq_check .code <<<"$RESPONSE" && [ "$(jq -r .code <<<"$RESPONSE")" != "200" ] && {
 			[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] $RESPONSE" >&2
 			return 1
@@ -217,17 +220,5 @@ checked_api(){
 }
 
 checked_api2(){
-	CHECK_API=api2 checked_api "$@"
-}
-
-load_instances(){
-	local PAGE_SIZE=50 PAGE_NUM=1 FILTER="${1:-.}"
-	while (( PAGE_SIZE > 0 )); do
-		local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
-		while read -r INSTANCE_ENTRY; do
-			PAGE_SIZE=50 && jq -c "select(.)|$FILTER"<<<"$INSTANCE_ENTRY"
-		done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
-		(( PAGE_NUM += 1 ))
-	done | jq -sc '.'
-	return 0
+	NPC_API=api2 checked_api "$@"
 }

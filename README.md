@@ -201,7 +201,7 @@ npc_vpc_networks:
       - security_group: unuse_group
         present: no
     route_tables:
-      - route_table: {main_route_table,test_table}
+      - route_table: '{main_route_table,test_table}'
         routes:
           - route: 192.168.99.0/24
             via_instance: vpc-instance-01

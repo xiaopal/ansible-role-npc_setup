@@ -7,8 +7,8 @@ setup_resources "vpc_routes"
 init_vpc_routes(){
 	local INPUT="$1" STAGE="$2" VPC VPC_NAME \
 		ROUTE_TABLE ROUTE_TABLE_NAME ROUTE_TABLE_ID 
-	jq_check '.npc_vpc_routes|arrays' $INPUT || return 0
-    (jq -c '.npc_vpc_routes//[]' $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='route' \
+	jq_check "$JQ_VPC_ROUTES" $INPUT || return 0
+    (jq -c "[ $JQ_VPC_ROUTES ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='route' \
 		expand_resources 'map(select(.route)
 			| . + (.route | capture("(?<cidr_addr>\\d+\\.\\d+\\.\\d+\\.\\d+)(?:/(?<cidr_mask>\\d+))?(?:@(?<route_table>[\\w\\-]+)@(?<vpc>[\\w\\-]+))?"))
 			| select(.route_table and .vpc)

@@ -6,6 +6,13 @@ setup_resources "vpc_subnets"
 setup_resources "vpc_security_groups"
 setup_resources "vpc_security_group_rules"
 
+JQ_VPC_NETWORKS='.npc_vpc_networks[]?'
+JQ_VPC_SUBNETS='.npc_vpc_subnets[]?, ('"$JQ_VPC_NETWORKS"'|select(.present != false) | . as $vpc | .subnets[]? | .subnet |= "\(.)@\($vpc.name)")'
+JQ_VPC_SECURITY_GROUPS='.npc_vpc_security_groups[]?, ('"$JQ_VPC_NETWORKS"'|select(.present != false) | . as $vpc | .security_groups[]? | .security_group |= "\(.)@\($vpc.name)")'
+JQ_VPC_SECURITY_GROUP_RULES='.npc_vpc_security_group_rules[]?, ('"$JQ_VPC_SECURITY_GROUPS"'|select(.present != false) | . as $security_group | .rules[]? | .rule |= "\(.)@\($security_group.security_group)")'
+JQ_VPC_ROUTE_TABLES='.npc_vpc_route_tables[]?, ('"$JQ_VPC_NETWORKS"'|select(.present != false) | . as $vpc | .route_tables[]? | .route_table |= "\(.)@\($vpc.name)")'
+JQ_VPC_ROUTES='.npc_vpc_routes[]?, ('"$JQ_VPC_ROUTE_TABLES"'|select(.present != false) | . as $route_table | .routes[]? | .route |= "\(.)@\($route_table.route_table)")'
+
 vpc_networks_lookup(){
 	local NETWORK="$1" FILTER="${2:-.Id}" STAGE="$NPC_STAGE/vpc_networks.lookup"
  	( exec 100>$STAGE.lock && flock 100
@@ -71,9 +78,9 @@ init_vpc_networks(){
 		id: .Id,
 		cidr: .CidrBlock
 	}'
-	jq_check '.npc_vpc_networks|arrays' $INPUT && {
+	jq_check "$JQ_VPC_NETWORKS" $INPUT && {
 		plan_resources "$STAGE" \
-			<(jq -c '.npc_vpc_networks//[]' $INPUT || >>$STAGE.error) \
+			<(jq -c "[ $JQ_VPC_NETWORKS ]" $INPUT || >>$STAGE.error) \
 			<(checked_api2 ".Vpcs//empty|map($LOAD_FILTER)" \
                 GET '/vpc?Version=2017-11-30&Action=ListVpc&Limit=100' || >>$STAGE.error) \
 			'. + {update: false}' || return 1
@@ -83,6 +90,10 @@ init_vpc_networks(){
 
 vpc_networks_create(){
 	local VPC_NETWORK="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_NETWORK" ] || return 1
+	[ ! -z "$(jq -r .cidr<<<"$VPC_NETWORK")" ] || {
+		echo "[ERROR] VPC network '$(jq -r .name<<<"$VPC_NETWORK")' required." >&2
+		return 1
+	}
 	local CREATE_VPC="$(jq -c '{
 		Name: .name,
 		CidrBlock: .cidr,
@@ -117,8 +128,8 @@ vpc_networks_destroy(){
 #    zone: cn-east-1b
 init_vpc_subnets(){
 	local INPUT="$1" STAGE="$2" VPC VPC_NAME VPC_ID
-	jq_check '.npc_vpc_subnets|arrays' $INPUT || return 0
-    (jq -c '.npc_vpc_subnets//[]' $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='subnet' \
+	jq_check "$JQ_VPC_SUBNETS" $INPUT || return 0
+    (jq -c "[ $JQ_VPC_SUBNETS ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='subnet' \
 		expand_resources 'map(select(.subnet)
 			| . + (.subnet | capture("(?:(?<subnet_name>[\\w\\-]+)/)?(?<cidr>\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+)(?:@(?<vpc>[\\w\\-]+))?")|with_entries(select(.value))) 
 			| select(.cidr and .vpc)
@@ -179,6 +190,120 @@ vpc_subnets_destroy(){
 	return 1
 }
 
+# - route_table: 'default@defaultVPCNetwork'
+init_vpc_route_tables(){
+	local INPUT="$1" STAGE="$2" VPC VPC_NAME VPC_ID
+	jq_check "$JQ_VPC_ROUTE_TABLES" $INPUT || return 0
+    (jq -c "[ $JQ_VPC_ROUTE_TABLES ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='route_table' \
+		expand_resources 'map(select(.route_table)
+			| . + (.route_table | capture("(?<route_table_name>[\\w\\-]+)(?:@(?<vpc>[\\w\\-]+))?")|with_entries(select(.value))) 
+			| select(.route_table_name and .vpc))' >$STAGE.expand
+	>$STAGE.init0;  >$STAGE.init1; 	
+    jq -r 'map(.vpc//empty)|unique[]' $STAGE.expand | while read -r VPC _; do
+            VPC="$VPC" vpc_networks_lookup "$VPC" '"\(env.VPC) \(.Id) \(.Name)"' || echo "$VPC"
+        done | sort -u | while read -r VPC VPC_ID VPC_NAME; do
+        [ ! -z "$VPC_ID" ] || { VPC="$VPC" \
+            jq_check '.[]|select(.vpc == env.VPC and .present != false)' $STAGE.expand || continue
+            >>$STAGE.error; break
+        }
+        ( export VPC VPC_NAME VPC_ID
+            LOAD_FILTER='{ route_table_name: .Name, id: .Id }'
+            ROUTE_TABLE_FILTER='.+{
+                name: "\(.route_table_name)@\(env.VPC_NAME)",
+                vpc_id: env.VPC_ID 
+            }'
+            jq -c "map(select(.vpc == env.VPC)|$ROUTE_TABLE_FILTER)" $STAGE.expand >>$STAGE.init0 
+            checked_api2 ".RouteTables//empty|map($LOAD_FILTER|$ROUTE_TABLE_FILTER)" \
+                GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
+        )
+    done
+    [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
+        <(jq -sc 'flatten' $STAGE.init0) <(jq -sc 'flatten' $STAGE.init1) \
+        '. + {update: false}' || return 1
+	return 0
+}
+
+vpc_route_tables_create(){
+	local VPC_ROUTE_TABLE="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_ROUTE_TABLE" ] || return 1
+	local CREATE_ROUTE_TABLE="$(jq -c '{
+		VpcId: .vpc_id,
+		Name: .route_table_name
+	}|with_entries(select(.value))'<<<"$VPC_ROUTE_TABLE")"
+    local TABLE_ID="$(checked_api2 '.RouteTable.Id' POST "/vpc?Version=2017-11-30&Action=CreateRouteTable" "$CREATE_ROUTE_TABLE")" \
+        && [ ! -z "$TABLE_ID" ] && {
+			echo "[INFO] VPC route table '$TABLE_ID' created." >&2
+			return 0
+        }
+	return 1
+}
+
+vpc_route_tables_destroy(){
+	local VPC_ROUTE_TABLE="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_ROUTE_TABLE" ] || return 1
+	local TABLE_ID="$(jq -r .id<<<"$VPC_ROUTE_TABLE")" && [ ! -z "$TABLE_ID" ] || return 1
+    [ ! -z "$(NPC_API_LOCK="$NPC_STAGE/vpc_route_tables.create_lock" checked_api2 '.RouteTable.Id' GET "/vpc?Version=2017-11-30&Action=DeleteRouteTable&Id=$TABLE_ID")" ] && {
+        echo "[INFO] VPC route table '$TABLE_ID' deleted." >&2
+        return 0
+    }
+	return 1
+}
+
+# - security_group: 'default@defaultVPCNetwork'
+init_vpc_security_groups(){
+	local INPUT="$1" STAGE="$2" VPC VPC_NAME VPC_ID
+	jq_check "$JQ_VPC_SECURITY_GROUPS" $INPUT || return 0
+    (jq -c "[ $JQ_VPC_SECURITY_GROUPS ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='security_group' \
+		expand_resources 'map(select(.security_group)
+			| . + (.security_group | capture("(?<security_group_name>[\\w\\-]+)(?:@(?<vpc>[\\w\\-]+))?")|with_entries(select(.value))) 
+			| select(.security_group_name and .vpc))' >$STAGE.expand
+	>$STAGE.init0;  >$STAGE.init1; 	
+    jq -r 'map(.vpc//empty)|unique[]' $STAGE.expand | while read -r VPC _; do
+            VPC="$VPC" vpc_networks_lookup "$VPC" '"\(env.VPC) \(.Id) \(.Name)"' || echo "$VPC"
+        done | sort -u | while read -r VPC VPC_ID VPC_NAME; do
+        [ ! -z "$VPC_ID" ] || { VPC="$VPC" \
+            jq_check '.[]|select(.vpc == env.VPC and .present != false)' $STAGE.expand || continue
+            >>$STAGE.error; break
+        }
+        ( export VPC VPC_NAME VPC_ID
+            LOAD_FILTER='{ security_group_name: .Name, id: .Id }'
+            SECURITY_GROUP_FILTER='.+{
+                name: "\(.security_group_name)@\(env.VPC_NAME)",
+                vpc_id: env.VPC_ID 
+            }'
+            jq -c "map(select(.vpc == env.VPC)|$SECURITY_GROUP_FILTER)" $STAGE.expand >>$STAGE.init0 
+            checked_api2 ".SecurityGroups//empty|map($LOAD_FILTER|$SECURITY_GROUP_FILTER)" \
+                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
+        )
+    done
+    [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
+        <(jq -sc 'flatten' $STAGE.init0) <(jq -sc 'flatten' $STAGE.init1) \
+        '. + {update: false}' || return 1
+	return 0
+}
+
+vpc_security_groups_create(){
+	local VPC_SECURITY_GROUP="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_SECURITY_GROUP" ] || return 1
+	local CREATE_SECURITY_GROUP="$(jq -c '{
+		VpcId: .vpc_id,
+		Name: .security_group_name
+	}|with_entries(select(.value))'<<<"$VPC_SECURITY_GROUP")"
+    local SECURITY_GROUP_ID="$(NPC_API_LOCK="$NPC_STAGE/vpc_security_groups.create_lock" checked_api2 '.SecurityGroup.Id' POST "/vpc?Version=2017-11-30&Action=CreateSecurityGroup" "$CREATE_SECURITY_GROUP")" \
+        && [ ! -z "$SECURITY_GROUP_ID" ] && {
+			echo "[INFO] VPC security group '$SECURITY_GROUP_ID' created." >&2
+			return 0
+        }
+	return 1
+}
+
+vpc_security_groups_destroy(){
+	local VPC_SECURITY_GROUP="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_SECURITY_GROUP" ] || return 1
+	local SECURITY_GROUP_ID="$(jq -r .id<<<"$VPC_SECURITY_GROUP")" && [ ! -z "$SECURITY_GROUP_ID" ] || return 1
+    [ ! -z "$(checked_api2 '.SecurityGroup.Id' GET "/vpc?Version=2017-11-30&Action=DeleteSecurityGroup&Id=$SECURITY_GROUP_ID")" ] && {
+        echo "[INFO] VPC security group '$SECURITY_GROUP_ID' deleted." >&2
+        return 0
+    }
+	return 1
+}
+
 #  - rule: ingress, 192.168.0.0/24, all @defaultSecurityGroup @defaultVPCNetwork
 #  - rule: egress,  10.1.1.1/32, all @defaultSecurityGroup @defaultVPCNetwork
 #  - rule: ingress, 192.168.0.0/24, tcp/80 @defaultSecurityGroup @defaultVPCNetwork
@@ -187,8 +312,8 @@ vpc_subnets_destroy(){
 init_vpc_security_group_rules(){
 	local INPUT="$1" STAGE="$2" VPC VPC_NAME \
 		SECURITY_GROUP SECURITY_GROUP_NAME SECURITY_GROUP_ID 
-	jq_check '.npc_vpc_security_group_rules|arrays' $INPUT || return 0
-    (jq -c '.npc_vpc_security_group_rules//[]' $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='rule' \
+	jq_check "$JQ_VPC_SECURITY_GROUP_RULES" $INPUT || return 0
+    (jq -c "[ $JQ_VPC_SECURITY_GROUP_RULES ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='rule' \
 		expand_resources 'map(select(.rule)
 			| . + (.rule | capture("(?:(?<direction>ingress|egress),)?(?:(?<remote_addr>\\d+\\.\\d+\\.\\d+\\.\\d+)(?:/(?<remote_mask>\\d+))?|(?<remote_security_group>[\\w\\-]+))(?:,(?<protocol>[\\w\\-]+)(?:/(?<port_lo>\\d+)(?:\\-(?<port_hi>\\d+))?)?)?(?:@(?<security_group>[\\w\\-]+)@(?<vpc>[\\w\\-]+))?"))
 			| select(.direction and .security_group and .vpc)
@@ -276,116 +401,3 @@ vpc_security_group_rules_destroy(){
 	return 1
 }
 
-# - route_table: 'default@defaultVPCNetwork'
-init_vpc_route_tables(){
-	local INPUT="$1" STAGE="$2" VPC VPC_NAME VPC_ID
-	jq_check '.npc_vpc_route_tables|arrays' $INPUT || return 0
-    (jq -c '.npc_vpc_route_tables//[]' $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='route_table' \
-		expand_resources 'map(select(.route_table)
-			| . + (.route_table | capture("(?<route_table_name>[\\w\\-]+)(?:@(?<vpc>[\\w\\-]+))?")|with_entries(select(.value))) 
-			| select(.route_table_name and .vpc))' >$STAGE.expand
-	>$STAGE.init0;  >$STAGE.init1; 	
-    jq -r 'map(.vpc//empty)|unique[]' $STAGE.expand | while read -r VPC _; do
-            VPC="$VPC" vpc_networks_lookup "$VPC" '"\(env.VPC) \(.Id) \(.Name)"' || echo "$VPC"
-        done | sort -u | while read -r VPC VPC_ID VPC_NAME; do
-        [ ! -z "$VPC_ID" ] || { VPC="$VPC" \
-            jq_check '.[]|select(.vpc == env.VPC and .present != false)' $STAGE.expand || continue
-            >>$STAGE.error; break
-        }
-        ( export VPC VPC_NAME VPC_ID
-            LOAD_FILTER='{ route_table_name: .Name, id: .Id }'
-            ROUTE_TABLE_FILTER='.+{
-                name: "\(.route_table_name)@\(env.VPC_NAME)",
-                vpc_id: env.VPC_ID 
-            }'
-            jq -c "map(select(.vpc == env.VPC)|$ROUTE_TABLE_FILTER)" $STAGE.expand >>$STAGE.init0 
-            checked_api2 ".RouteTables//empty|map($LOAD_FILTER|$ROUTE_TABLE_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
-        )
-    done
-    [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
-        <(jq -sc 'flatten' $STAGE.init0) <(jq -sc 'flatten' $STAGE.init1) \
-        '. + {update: false}' || return 1
-	return 0
-}
-
-vpc_route_tables_create(){
-	local VPC_ROUTE_TABLE="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_ROUTE_TABLE" ] || return 1
-	local CREATE_ROUTE_TABLE="$(jq -c '{
-		VpcId: .vpc_id,
-		Name: .route_table_name
-	}|with_entries(select(.value))'<<<"$VPC_ROUTE_TABLE")"
-    local TABLE_ID="$(checked_api2 '.RouteTable.Id' POST "/vpc?Version=2017-11-30&Action=CreateRouteTable" "$CREATE_ROUTE_TABLE")" \
-        && [ ! -z "$TABLE_ID" ] && {
-			echo "[INFO] VPC route table '$TABLE_ID' created." >&2
-			return 0
-        }
-	return 1
-}
-
-vpc_route_tables_destroy(){
-	local VPC_ROUTE_TABLE="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_ROUTE_TABLE" ] || return 1
-	local TABLE_ID="$(jq -r .id<<<"$VPC_ROUTE_TABLE")" && [ ! -z "$TABLE_ID" ] || return 1
-    [ ! -z "$(NPC_API_LOCK="$NPC_STAGE/vpc_route_tables.create_lock" checked_api2 '.RouteTable.Id' GET "/vpc?Version=2017-11-30&Action=DeleteRouteTable&Id=$TABLE_ID")" ] && {
-        echo "[INFO] VPC route table '$TABLE_ID' deleted." >&2
-        return 0
-    }
-	return 1
-}
-
-# - security_group: 'default@defaultVPCNetwork'
-init_vpc_security_groups(){
-	local INPUT="$1" STAGE="$2" VPC VPC_NAME VPC_ID
-	jq_check '.npc_vpc_security_groups|arrays' $INPUT || return 0
-    (jq -c '.npc_vpc_security_groups//[]' $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='security_group' \
-		expand_resources 'map(select(.security_group)
-			| . + (.security_group | capture("(?<security_group_name>[\\w\\-]+)(?:@(?<vpc>[\\w\\-]+))?")|with_entries(select(.value))) 
-			| select(.security_group_name and .vpc))' >$STAGE.expand
-	>$STAGE.init0;  >$STAGE.init1; 	
-    jq -r 'map(.vpc//empty)|unique[]' $STAGE.expand | while read -r VPC _; do
-            VPC="$VPC" vpc_networks_lookup "$VPC" '"\(env.VPC) \(.Id) \(.Name)"' || echo "$VPC"
-        done | sort -u | while read -r VPC VPC_ID VPC_NAME; do
-        [ ! -z "$VPC_ID" ] || { VPC="$VPC" \
-            jq_check '.[]|select(.vpc == env.VPC and .present != false)' $STAGE.expand || continue
-            >>$STAGE.error; break
-        }
-        ( export VPC VPC_NAME VPC_ID
-            LOAD_FILTER='{ security_group_name: .Name, id: .Id }'
-            SECURITY_GROUP_FILTER='.+{
-                name: "\(.security_group_name)@\(env.VPC_NAME)",
-                vpc_id: env.VPC_ID 
-            }'
-            jq -c "map(select(.vpc == env.VPC)|$SECURITY_GROUP_FILTER)" $STAGE.expand >>$STAGE.init0 
-            checked_api2 ".SecurityGroups//empty|map($LOAD_FILTER|$SECURITY_GROUP_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
-        )
-    done
-    [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
-        <(jq -sc 'flatten' $STAGE.init0) <(jq -sc 'flatten' $STAGE.init1) \
-        '. + {update: false}' || return 1
-	return 0
-}
-
-vpc_security_groups_create(){
-	local VPC_SECURITY_GROUP="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_SECURITY_GROUP" ] || return 1
-	local CREATE_SECURITY_GROUP="$(jq -c '{
-		VpcId: .vpc_id,
-		Name: .security_group_name
-	}|with_entries(select(.value))'<<<"$VPC_SECURITY_GROUP")"
-    local SECURITY_GROUP_ID="$(NPC_API_LOCK="$NPC_STAGE/vpc_security_groups.create_lock" checked_api2 '.SecurityGroup.Id' POST "/vpc?Version=2017-11-30&Action=CreateSecurityGroup" "$CREATE_SECURITY_GROUP")" \
-        && [ ! -z "$SECURITY_GROUP_ID" ] && {
-			echo "[INFO] VPC security group '$SECURITY_GROUP_ID' created." >&2
-			return 0
-        }
-	return 1
-}
-
-vpc_security_groups_destroy(){
-	local VPC_SECURITY_GROUP="$1" RESULT="$2" CTX="$3" && [ ! -z "$VPC_SECURITY_GROUP" ] || return 1
-	local SECURITY_GROUP_ID="$(jq -r .id<<<"$VPC_SECURITY_GROUP")" && [ ! -z "$SECURITY_GROUP_ID" ] || return 1
-    [ ! -z "$(checked_api2 '.SecurityGroup.Id' GET "/vpc?Version=2017-11-30&Action=DeleteSecurityGroup&Id=$SECURITY_GROUP_ID")" ] && {
-        echo "[INFO] VPC security group '$SECURITY_GROUP_ID' deleted." >&2
-        return 0
-    }
-	return 1
-}

@@ -93,7 +93,7 @@ do_setup(){
 			"init_$RESOURCE" "$NPC_STAGE/.input" "$NPC_STAGE/$RESOURCE" || return 1
 		}
 	
-		[ ! -z "$ACTION_INIT" ] || for ACTION in ${ACTIONS:-create update destroy}; do
+		[ ! -z "$ACTION_INIT" ] || for ACTION in ${ACTIONS:-destroy update create}; do
 			[ ! -z "$ACTION" ] && {
 				echo "[INFO] $ACTION $RESOURCE">&2
 				[ "$ACTION" = "create" ] && {

@@ -17,7 +17,7 @@ vpc_networks_lookup(){
 	local NETWORK="$1" FILTER="${2:-.Id}" STAGE="$NPC_STAGE/vpc_networks.lookup"
  	( exec 100>$STAGE.lock && flock 100
  		[ ! -f $STAGE ] && {
- 			checked_api2 '.Vpcs' GET '/vpc?Version=2017-11-30&Action=ListVpc&Limit=100' >$STAGE || rm -f $STAGE
+ 			checked_api2 '.Vpcs' GET '/vpc?Version=2017-11-30&Action=ListVpc&Limit=200' >$STAGE || rm -f $STAGE
  		}
  	)
  	[ ! -z "$NETWORK" ] && [ -f $STAGE ] && NETWORK="$NETWORK" \
@@ -32,7 +32,7 @@ vpc_subnets_lookup(){
     local STAGE="$NPC_STAGE/vpc_subnets.$NETWORK.lookup"
  	( exec 100>$STAGE.lock && flock 100
  		[ ! -f $STAGE ] && {
-            checked_api2 '.Subnets' GET "/vpc?Version=2017-11-30&Action=ListSubnet&VpcId=$NETWORK&Limit=100" >$STAGE || rm -f $STAGE
+            checked_api2 '.Subnets' GET "/vpc?Version=2017-11-30&Action=ListSubnet&VpcId=$NETWORK&Limit=200" >$STAGE || rm -f $STAGE
  		}
  	)
  	[ ! -z "$SUBNET" ] && [ -f $STAGE ] && SUBNET="$SUBNET" \
@@ -47,7 +47,7 @@ vpc_route_tables_lookup(){
     local STAGE="$NPC_STAGE/vpc_route_tables.$NETWORK.lookup"
  	( exec 100>$STAGE.lock && flock 100
  		[ ! -f $STAGE ] && {
-            checked_api2 '.RouteTables' GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$NETWORK&Limit=100" >$STAGE || rm -f $STAGE
+            checked_api2 '.RouteTables' GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$NETWORK&Limit=200" >$STAGE || rm -f $STAGE
  		}
  	)
  	[ ! -z "$TABLE" ] && [ -f $STAGE ] && TABLE="$TABLE" \
@@ -62,7 +62,7 @@ vpc_security_groups_lookup(){
     local STAGE="$NPC_STAGE/vpc_security_groups.$NETWORK.lookup"
  	( exec 100>$STAGE.lock && flock 100
  		[ ! -f $STAGE ] && {
-            checked_api2 '.SecurityGroups' GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$NETWORK&Limit=100" >$STAGE || rm -f $STAGE
+            checked_api2 '.SecurityGroups' GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$NETWORK&Limit=200" >$STAGE || rm -f $STAGE
  		}
  	)
  	[ ! -z "$GROUP" ] && [ -f $STAGE ] && GROUP="$GROUP" \
@@ -82,7 +82,7 @@ init_vpc_networks(){
 		plan_resources "$STAGE" \
 			<(jq -c "[ $JQ_VPC_NETWORKS ]" $INPUT || >>$STAGE.error) \
 			<(checked_api2 ".Vpcs//empty|map($LOAD_FILTER)" \
-                GET '/vpc?Version=2017-11-30&Action=ListVpc&Limit=100' || >>$STAGE.error) \
+                GET '/vpc?Version=2017-11-30&Action=ListVpc&Limit=200' || >>$STAGE.error) \
 			'. + {update: false}' || return 1
 	}
 	return 0
@@ -155,7 +155,7 @@ init_vpc_subnets(){
             }'
             jq -c "map(select(.vpc == env.VPC)|$SUBNET_FILTER)" $STAGE.expand >>$STAGE.init0 
             checked_api2 ".Subnets//empty|map($LOAD_FILTER|$SUBNET_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListSubnet&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
+                GET "/vpc?Version=2017-11-30&Action=ListSubnet&VpcId=$VPC_ID&Limit=200" >>$STAGE.init1
         )
     done
     [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
@@ -214,7 +214,7 @@ init_vpc_route_tables(){
             }'
             jq -c "map(select(.vpc == env.VPC)|$ROUTE_TABLE_FILTER)" $STAGE.expand >>$STAGE.init0 
             checked_api2 ".RouteTables//empty|map($LOAD_FILTER|$ROUTE_TABLE_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
+                GET "/vpc?Version=2017-11-30&Action=ListRouteTable&VpcId=$VPC_ID&Limit=200" >>$STAGE.init1
         )
     done
     [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
@@ -271,7 +271,7 @@ init_vpc_security_groups(){
             }'
             jq -c "map(select(.vpc == env.VPC)|$SECURITY_GROUP_FILTER)" $STAGE.expand >>$STAGE.init0 
             checked_api2 ".SecurityGroups//empty|map($LOAD_FILTER|$SECURITY_GROUP_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$VPC_ID&Limit=100" >>$STAGE.init1
+                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroup&VpcId=$VPC_ID&Limit=200" >>$STAGE.init1
         )
     done
     [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
@@ -363,7 +363,7 @@ init_vpc_security_group_rules(){
 				}'"|$RULE_FILTER"<<<"$VPC_RULE"
 			done >>$STAGE.init0 
             checked_api2 ".SecurityGroupRules//empty|map($LOAD_FILTER|$RULE_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroupRule&SecurityGroupId=$SECURITY_GROUP_ID&Limit=100" >>$STAGE.init1
+                GET "/vpc?Version=2017-11-30&Action=ListSecurityGroupRule&SecurityGroupId=$SECURITY_GROUP_ID&Limit=200" >>$STAGE.init1
         )
     done
     [ ! -f $STAGE.error ] && plan_resources "$STAGE" \

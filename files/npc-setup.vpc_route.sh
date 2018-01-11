@@ -38,7 +38,7 @@ init_vpc_routes(){
             }'
             jq -c "map(select(.vpc == env.VPC and .route_table == env.ROUTE_TABLE)|$ROUTE_FILTER)" $STAGE.expand >>$STAGE.init0 
             checked_api2 ".Routes//empty|map($LOAD_FILTER|$ROUTE_FILTER)" \
-                GET "/vpc?Version=2017-11-30&Action=ListRoute&RouteTableId=$ROUTE_TABLE_ID&Limit=100" >>$STAGE.init1
+                GET "/vpc?Version=2017-11-30&Action=ListRoute&RouteTableId=$ROUTE_TABLE_ID&Limit=200" >>$STAGE.init1
         )
     done
     [ ! -f $STAGE.error ] && plan_resources "$STAGE" \

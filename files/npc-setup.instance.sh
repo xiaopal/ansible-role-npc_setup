@@ -184,12 +184,16 @@ instances_prepare(){
 }
 
 instances_wait_instance(){
-	local INSTANCE_ID="$1" CTX="$2" && shift && shift && [ ! -z "$INSTANCE_ID" ] || return 1
+	local INSTANCE INSTANCE_ID="$1" CTX="$2" && shift && shift && [ ! -z "$INSTANCE_ID" ] || return 1
 	local ARGS=("$@") && (( ${#ARGS[@]} > 0)) || ARGS=('select(.)') 
 	while action_check_continue "$CTX"; do
-		npc api "json|$MAPPER_PRE_LOAD_INSTANCE|select($FILTER_INSTANCE_STATUS)" GET "/api/v1/vm/$INSTANCE_ID" \
-			| jq_check "${ARGS[@]}" \
-			&& return 0
+		INSTANCE="$(npc api "json|$MAPPER_PRE_LOAD_INSTANCE" GET "/api/v1/vm/$INSTANCE_ID")" && [ ! -z "$INSTANCE" ] && {
+			jq_check 'select(.status=="ERROR")'<<<"$INSTANCE" && {
+				echo "[ERROR] instance '$INSTANCE_ID' status 'ERROR'." >&2 
+				return 9
+			}
+			jq "select($FILTER_INSTANCE_STATUS)"<<<"$INSTANCE" | jq_check "${ARGS[@]}" && return 0
+		}
 		sleep "$NPC_ACTION_PULL_SECONDS"
 	done
 	return 1
@@ -235,6 +239,13 @@ instances_create(){
 					--argjson instance "$INSTANCE" "$FILTER_LOAD_INSTANCE" --out $RESULT || return 1
 				return 0
 			}
+
+		# status == ERROR, @See instances_wait_instance
+		[ "$?" == "9" ] && {
+			instances_destroy "$(export INSTANCE_ID && jq -nc '{id: env.INSTANCE_ID}')" "$RESULT" "$CTX" && continue
+			return 1
+		}
+
 		echo "[ERROR] $RESPONSE" >&2
 		# {"code":4030001,"msg":"Api freq out of limit."}
 		[ "$(jq -r .code <<<"$RESPONSE")" = "4030001" ] && ( 

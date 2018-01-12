@@ -69,7 +69,7 @@ plan_resources(){
 			absent : (.present == null and .actual_present)
 		}'"${STAGE_MAPPER:+| $STAGE_MAPPER}"')' $STAGE.expected $STAGE.actual >$STAGE \
 		&& rm -f $STAGE.* || return 1
-	jq -ce '.[]|select((.absent|not) and .error)|.error' $STAGE >&2 && return 1
+	jq -ce '.[]|select(.error and ((.absent or (.destroy and .force_destroy))|not))|.error' $STAGE >&2 && return 1
 	jq -ce '.[]|select(.absent)' $STAGE > $STAGE.omit || rm -f $STAGE.omit
 	jq -ce '.[]|select(.create)' $STAGE > $STAGE.creating || rm -f $STAGE.creating
 	jq -ce '.[]|select(.update)' $STAGE > $STAGE.updating || rm -f $STAGE.updating

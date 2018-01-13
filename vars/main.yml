@@ -28,10 +28,10 @@ npc_setup_options:
 
   init_ssh_key: '{{ npc_setup_effective.init_ssh_key | default(npc_setup_resources.npc_ssh_key|default(false,true) != false) }}'
 
-  add_hosts: '{{ npc_setup_effective.add_hosts | default(true) }}'
-  group_by: '{{ npc_setup_effective.group_by | default({}, true) }}'
+  add_hosts: '{{ npc_setup_effective.add_hosts | default(npc_setup_add_hosts) | default(true) | default(false,true) }}'
+  group_by: '{{ npc_setup_effective.group_by | default(npc_setup_group_by) | default({}, true) }}'
   
-  groups: '{{ npc_setup_effective.groups | default([],true) }}'
+  groups: '{{ npc_setup_effective.groups | default(npc_setup_groups) | default([],true) }}'
   vars: '{{ npc_setup_effective.vars | default({},true) }}'
 
   ssh_host_by: '{{ npc_setup_effective.ssh_host_by | default("lan_ip", true) }}'

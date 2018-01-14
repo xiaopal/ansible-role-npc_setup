@@ -361,14 +361,30 @@ instances_destroy(){
 }
 
 load_instances(){
-	local PAGE_SIZE=50 PAGE_NUM=1 FILTER="${1:-.}"
-	while (( PAGE_SIZE > 0 )); do
-		local PARAMS="pageSize=$PAGE_SIZE&pageNum=$PAGE_NUM" && PAGE_SIZE=0
-		while read -r INSTANCE_ENTRY; do
-			PAGE_SIZE=50 && jq -c "select(.)|$FILTER"<<<"$INSTANCE_ENTRY"
-		done < <(npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?$PARAMS") 
-		(( PAGE_NUM += 1 ))
-	done | jq -sc '.'
+	local PAGE_SIZE=50 PAGE_NUM FILTER="${1:-.}" PAGE_TOTAL PAGES=() FORKS FORK
+	{
+		PAGE_NUM=1 && read -r PAGE_TOTAL || return 1
+		fork_next_page(){
+			[ ! -z "$FORKS" ] || FORKS="$(mktemp -d)"
+			(( PAGE_NUM ++ )) && local FORK="$PAGE_NUM"
+			mkfifo "$FORKS/$FORK" && PAGES=("${PAGES[@]}" "$FORKS/$FORK" ) || return 1
+			(
+				npc api 'json.instances[]' GET "/api/v1/vm/allInstanceInfo?pageSize=$PAGE_SIZE&pageNum=$FORK" >"$FORKS/$FORK.load"
+				cat "$FORKS/$FORK.load" >"$FORKS/$FORK" 
+			) & return 0
+		}
+		(( PAGE_TOTAL > 1 )) && for FORK in $(seq 1 ${NPC_ACTION_FORKS:-1}); do
+			(( PAGE_NUM < PAGE_TOTAL )) && fork_next_page || break
+		done
+		jq -c "select(.)|$FILTER"
+		while [ ! -z "${PAGES[0]}" ]; do
+			jq -c "select(.)|$FILTER" <"${PAGES[0]}"
+			unset PAGES[0] && PAGES=("${PAGES[@]}")
+			(( PAGE_NUM < PAGE_TOTAL )) && fork_next_page
+		done
+	 } < <(npc api 'json|.total_page,.instances[]' GET "/api/v1/vm/allInstanceInfo?pageSize=$PAGE_SIZE&pageNum=1") \
+		| jq -sc '.'
+	wait; [ ! -z "$FORKS" ] && rm -fr "$FORKS"
 	return 0
 }
 

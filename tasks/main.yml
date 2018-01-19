@@ -41,6 +41,68 @@
   set_fact:
     npc: "{{ npc_execution.stdout | from_json }}"
 
+- name: export 'npc_inventory'
+  vars: 
+    add_hosts_match: '{{ (npc_setup_options.add_hosts in [true, false]) | ternary([],
+        (npc_setup_options.add_hosts is string) | ternary(
+          [npc_setup_options.add_hosts], 
+          npc_setup_options.add_hosts)
+      ) }}'
+    add_hosts_include: '{{add_hosts_match|map("regex_search","^[^!].+")|select|list}}'
+    add_hosts_exclude: '{{add_hosts_match|map("regex_search","(?<=^!).+")|select|list}}'
+    all_group: '{{npc_setup_options.group_by["all"]|default("", true)}}'
+  set_fact:
+    npc_inventory: '{% set inv_hosts, inv_groups = {}, {}
+      %}{% if npc_setup_options.add_hosts != false 
+        %}{% for item in (npc.instances|default({}, true)).values()
+          %}{% set change_group = npc_setup_options.group_by[item.change_action|default("none", true)]|default("", true)
+          %}{% set item_groups = (item.groups | default([]))
+              + ((all_group | length > 0) | ternary([all_group],[])) 
+              + ((change_group | length > 0) | ternary([change_group],[]))
+          %}{% if (["all", item.name] | intersect(add_hosts_exclude) | length == 0)
+              and (item_groups | intersect(add_hosts_exclude) | length == 0)
+              and ( npc_setup_options.add_hosts == true
+                or (add_hosts_include | length == 0)
+                or (["all", item.name] | intersect(add_hosts_include) | length > 0)
+                or (item_groups | intersect(add_hosts_include) | length > 0) )
+            %}{% set ssh_host_by = item.ssh_host_by|default(npc_setup_options.ssh_host_by, true)
+            %}{% set ssh_jump_host = item.ssh_jump_host|default(npc_setup_options.ssh_jump_host, true)
+            %}{% set ssh_jump_port = item.ssh_jump_port|default(npc_setup_options.ssh_jump_port, true)
+            %}{% set ssh_jump_user = item.ssh_jump_user|default(npc_setup_options.ssh_jump_user, true)
+            %}{% set ssh_jump_key_file = item.ssh_jump_key_file | default(npc_setup_options.ssh_jump_key_file, true)
+            %}{% set npc_jump_vars = npc.instances[ssh_jump_host]|default({})
+            %}{% set ssh_jump_vars = hostvars[ssh_jump_host]|default(npc_jump_vars.vars)|default({})
+            %}{% set ssh_jump_args 
+              %}{% if ssh_jump_host != false 
+                %}-o ProxyCommand="ssh -W %h:%p -q{% if ssh_jump_port|default(ssh_jump_vars.ansible_port,true)|default(false) 
+                  %} -p {{ssh_jump_port|default(ssh_jump_vars.ansible_port,true)}}{% endif 
+                %}{% if npc.instances.has_key(ssh_jump_host) 
+                  %}{% if ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) | default(false) 
+                    %} -i {{ ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) }}{% endif 
+                  %} {% if ssh_jump_user|default(npc_jump_vars.ssh_user,true)|default(false) 
+                    %}{{ssh_jump_user|default(npc_jump_vars.ssh_user,true)}}@{% endif 
+                  %}{{npc_jump_vars[npc_jump_vars.ssh_host_by|default(npc_setup_options.ssh_host_by, true)]}}{% 
+                else%}{% if ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) | default(false) 
+                    %} -i {{ ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) }}{% endif 
+                  %} {% if ssh_jump_user|default(ssh_jump_vars.ansible_user,true)|default(false) 
+                    %}{{ssh_jump_user|default(ssh_jump_vars.ansible_user,true)}}@{% endif 
+                  %}{{ssh_jump_vars.ansible_host|default(ssh_jump_host)}}{% 
+                endif %}"{% endif %}{% endset
+            %}{% set host = dict( ansible_host=item[ssh_host_by],
+                npc_groups= npc_setup_options.groups + item_groups | unique,
+                npc_instance=item )
+            %}{% for group in host.npc_groups
+              %}{% set group_hosts = (inv_groups[group] | default({})).hosts | default({}) | combine({item.name: None})
+              %}{% set _ = inv_groups.update({group: dict(hosts=group_hosts)})
+            %}{% endfor
+            %}{% if item.ssh_user | default(false) %}{% set _ = host.update(dict(ansible_user=item.ssh_user)) %}{% endif 
+            %}{% if item.ssh_key_file | default(false) %}{% set _ = host.update(dict(ansible_ssh_private_key_file=item.ssh_key_file)) %}{% endif 
+            %}{% if ssh_jump_host != false %}{% set _ = host.update(dict(ansible_ssh_common_args=ssh_jump_args)) %}{% endif 
+            %}{% set _ = inv_hosts.update({item.name: host | combine( npc_setup_options.vars, item.vars|default({},true)) })
+          %}{% endif 
+        %}{% endfor 
+      %}{% endif %}{{ dict(hosts=inv_hosts, children=inv_groups) }}'
+
 - name: summary
   debug: 
     msg: npc_setup - 
@@ -60,61 +122,26 @@
       {% endif %}
   changed_when: npc.changed
 
-- name: register hosts
-  with_items: "{{ npc.instances.values() }}"
-  when: 
-    - npc.instances is defined
-    - npc_setup_options.add_hosts != false 
-      and (["all", item.name] | intersect(add_hosts_exclude) | length == 0)
-      and (npc_groups | intersect(add_hosts_exclude) | length == 0)
-    - npc_setup_options.add_hosts == true
-      or (add_hosts_include | length == 0)
-      or (["all", item.name] | intersect(add_hosts_include) | length > 0)
-      or (npc_groups | intersect(add_hosts_include) | length > 0)
+- name: exports inventory 
   vars:
-      add_hosts_match: '{{ (npc_setup_options.add_hosts in [true, false]) | ternary([],
-          (npc_setup_options.add_hosts is string) | ternary(
-            [npc_setup_options.add_hosts], 
-            npc_setup_options.add_hosts)
-        ) }}'
-      add_hosts_include: '{{add_hosts_match|map("regex_search","^[^!].+")|select|list}}'
-      add_hosts_exclude: '{{add_hosts_match|map("regex_search","(?<=^!).+")|select|list}}'
-      
-      npc_change_group: '{{npc_setup_options.group_by[item.change_action|default("none", true)]|default("", true)}}'
-      npc_all_group: '{{npc_setup_options.group_by["all"]|default("", true)}}'
-      npc_groups: '{{ (item.groups | default([]))
-        + ((npc_all_group | length > 0) | ternary([npc_all_group],[])) 
-        + ((npc_change_group | length > 0) | ternary([npc_change_group],[])) }}'
-      ssh_host_by: '{{item.ssh_host_by|default(npc_setup_options.ssh_host_by, true)}}'
-      ssh_jump_host: '{{item.ssh_jump_host|default(npc_setup_options.ssh_jump_host, true)}}'
-      ssh_jump_port: '{{item.ssh_jump_port|default(npc_setup_options.ssh_jump_port, true)}}'
-      ssh_jump_user: '{{item.ssh_jump_user|default(npc_setup_options.ssh_jump_user, true)}}'
-      ssh_jump_key_file: '{{ item.ssh_jump_key_file | default(npc_setup_options.ssh_jump_key_file, true) }}'
-      npc_jump_vars: '{{npc.instances[ssh_jump_host]|default({})}}'
-      ssh_jump_vars: '{{hostvars[ssh_jump_host]|default(npc_jump_vars.vars)|default({})}}'
-      ssh_jump_args: '{% if ssh_jump_host != false %}-o ProxyCommand="ssh -W %h:%p -q 
-        {% if ssh_jump_port|default(ssh_jump_vars.ansible_port,true)|default(false) %}
-          -p {{ssh_jump_port|default(ssh_jump_vars.ansible_port,true)}}
-        {% endif %}
-        {% if npc.instances.has_key(ssh_jump_host) %}
-          {% if ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) | default(false) %}
-            -i {{ ssh_jump_key_file | default(npc_jump_vars.ssh_key_file,true) }}
-          {% endif %}
-          {% if ssh_jump_user|default(npc_jump_vars.ssh_user,true)|default(false) %}{{ssh_jump_user|default(npc_jump_vars.ssh_user,true)}}@{% endif %}{{npc_jump_vars[npc_jump_vars.ssh_host_by|default(npc_setup_options.ssh_host_by, true)]}}
-        {% else %}
-          {% if ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) | default(false) %}
-            -i {{ ssh_jump_key_file | default(ssh_jump_vars.ansible_ssh_private_key_file,true) }}
-          {% endif %}
-          {% if ssh_jump_user|default(ssh_jump_vars.ansible_user,true)|default(false) %}{{ssh_jump_user|default(ssh_jump_vars.ansible_user,true)}}@{% endif %}{{ssh_jump_vars.ansible_host|default(ssh_jump_host)}}
-        {% endif %}"{% endif %}'
+    default_inventory_path: '{{lookup("env","PWD")}}/npc_inventory.yml'
+    npc_simple_inventory: '{% set simple_hosts = {}
+      %}{% for key, value in npc_inventory.hosts.iteritems()
+      %}{% set _ = simple_hosts.update({key: value|combine(dict(npc_instance=true))})
+      %}{% endfor %}{{dict(
+        hosts=simple_hosts, 
+        children=npc_inventory.children)}}'
+  copy: dest={{ (npc_setup_options.export_inventory == true) | ternary(default_inventory_path , npc_setup_options.export_inventory) }}
+    content={{dict(all=npc_setup_options.export_simple_inventory | ternary(npc_simple_inventory, npc_inventory)) | to_yaml }}
+  when: 
+    - npc.instances | default(false)
+    - npc_setup_options.export_inventory
+
+- name: register hosts
+  with_dict: "{{ npc_setup_options.export_inventory | ternary({}, npc_inventory.hosts) }}"
   add_host: 
-  args: '{{ dict(
-      hostname=item.name,
-      groups=( npc_setup_options.groups + npc_groups ),
-      ansible_host=item[ssh_host_by],
-      ansible_user=(item.ssh_user|default(omit)),
-      ansible_ssh_common_args=((ssh_jump_host != false)|ternary(ssh_jump_args, omit) ),
-      ansible_ssh_private_key_file=(item.ssh_key_file|default(omit)),
-      npc_instance=item
-      ) | combine( npc_setup_options.vars, item.vars|default({},true) ) }}'
+  args: '{{ item.value | combine(dict(hostname=item.key, groups=item.value.npc_groups)) }}'
+  when:
+    - npc.instances | default(false)
+    - not npc_setup_options.export_inventory
   changed_when: false

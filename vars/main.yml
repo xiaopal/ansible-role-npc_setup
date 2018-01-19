@@ -30,6 +30,10 @@ npc_setup_options:
 
   add_hosts: '{{ npc_setup_effective.add_hosts | default(npc_setup_add_hosts) | default(true) | default(false,true) }}'
   group_by: '{{ npc_setup_effective.group_by | default(npc_setup_group_by) | default({}, true) }}'
+  export_inventory: '{{ npc_setup_effective.export_inventory | default(npc_setup_export_inventory) 
+    | default(npc_setup_effective.export_simple_inventory) | default(npc_setup_export_simple_inventory)
+    | default(false, true) }}'
+  export_simple_inventory: '{{ npc_setup_effective.export_simple_inventory | default(npc_setup_export_simple_inventory) | default(false, true) }}'
   
   groups: '{{ npc_setup_effective.groups | default(npc_setup_groups) | default([],true) }}'
   vars: '{{ npc_setup_effective.vars | default({},true) }}'

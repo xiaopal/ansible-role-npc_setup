@@ -151,16 +151,17 @@ apply_actions(){
 	touch $RESULT && ( exec 99<$INPUT
 		for FORK in $(seq 1 ${NPC_ACTION_FORKS:-1}); do
 			[ ! -z "$FORK" ] && rm -f $RESULT.$FORK || continue
-			while [ -f $RESULT ]; do
+			while [ ! -f $RESULT.error ]; do
 				flock 99 && read -r ACTION_ITEM <&99 && flock -u 99 || break
 				$ACTION "$ACTION_ITEM" "$RESULT.$FORK" "$SECONDS $RESULT" && {
 					[ -f "$RESULT.$FORK" ] || echo "$ACTION_ITEM" >"$RESULT.$FORK"
 					flock 99 && jq -ce '.' $RESULT.$FORK >>$RESULT && flock -u 99 && continue
 				}
+				>>$RESULT.error
 				rm -f "$RESULT.$FORK"; rm -f $RESULT; break
 			done &
 		done; wait )
-	[ -f $RESULT ] && rm -f $RESULT.* && return 0
+	[ -f $RESULT ] && [ ! -f $RESULT.error ] && rm -f $RESULT.* && return 0
 	return 1
 }
 

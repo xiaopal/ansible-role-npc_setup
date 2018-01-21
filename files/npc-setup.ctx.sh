@@ -148,21 +148,21 @@ report_resources(){
 
 apply_actions(){
 	local ACTION="$1" INPUT="$2" RESULT="$3" FORK=0 && [ -f $INPUT ] || return 0
-	touch $RESULT && ( exec 99<$INPUT
+	touch $RESULT && (  
 		for FORK in $(seq 1 ${NPC_ACTION_FORKS:-1}); do
 			[ ! -z "$FORK" ] && rm -f $RESULT.$FORK || continue
 			while [ ! -f $RESULT.error ]; do
-				flock 99 && read -r ACTION_ITEM <&99 && flock -u 99 || break
+				flock 91 && read -r ACTION_ITEM <&90 && flock -u 91 || break
 				$ACTION "$ACTION_ITEM" "$RESULT.$FORK" "$SECONDS $RESULT" && {
 					[ -f "$RESULT.$FORK" ] || echo "$ACTION_ITEM" >"$RESULT.$FORK"
-					flock 99 && jq -ce '.' $RESULT.$FORK >>$RESULT && flock -u 99 && continue
+					flock 91 && jq -ce '.' $RESULT.$FORK >>$RESULT && flock -u 91 && continue
 				}
 				>>$RESULT.error
-				rm -f "$RESULT.$FORK"; rm -f $RESULT; break
-			done &
-		done; wait )
+				rm -f "$RESULT.$FORK"; break
+			done 91<$RESULT &
+		done 90<$INPUT; wait )
 	[ -f $RESULT ] && [ ! -f $RESULT.error ] && rm -f $RESULT.* && return 0
-	return 1
+	rm -f $RESULT; return 1
 }
 
 time_to_seconds(){

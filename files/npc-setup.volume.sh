@@ -29,9 +29,10 @@ init_volumes(){
 			<(jq -c '.npc_volumes//[]' $INPUT || >>$STAGE.error) \
 			<(load_volumes || >>$STAGE.error) \
 			'. + (if .update then {update: false}
-					+ if  .capacity and (.capacity|sub("[Gg]$"; "")) != (.actual_capacity|sub("[Gg]$"; "")) then
-						{update: true}
-					else {} end
+# do not resize			
+#					+ if  .capacity and (.capacity|sub("[Gg]$"; "")) != (.actual_capacity|sub("[Gg]$"; "")) then
+#						{update: true}
+#					else {} end
 				else {} end)' || return 1
 	}
 	return 0

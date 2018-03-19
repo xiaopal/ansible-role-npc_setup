@@ -165,29 +165,37 @@ EOF
 
 ## 支持VPC (NEW)
 ```
-# npc playbook --setup <<EOF
+# npc playbook -<<EOF
 ---
-npc_volumes:
-  - name: test-hd-{1,2}
-    zone: cn-east-1b
-    capacity: 10G
-npc_instances:
-  - name: test-vm
-    zone: cn-east-1b
-    instance_type: {series: 2, type: 2, cpu: 4, memory: 8G}
-    instance_image: Debian 8.6
-    vpc: defaultVPCNetwork
-    vpc_subnet: default
-    vpc_security_group: default
-    vpc_inet: yes
-    vpc_inet_capacity: 10m
-    ssh_keys:
-      - Xiaohui-GRAYPC
-    volumes:
-      - name: test-hd-1
-      - test-hd-2
-    present: yes
+- hosts: localhost
+  gather_facts: no
+  roles:
+    - role: xiaopal.npc_setup
+      npc_volumes:
+        - name: test-hd-{1,2}
+          zone: cn-east-1b
+          capacity: 10G
+      npc_instances:
+        - name: test-vm
+          zone: cn-east-1b
+          instance_type: {series: 2, type: 2, cpu: 4, memory: 8G}
+          instance_image: Debian 8.6
+          vpc: defaultVPCNetwork
+          vpc_subnet: default
+          vpc_security_group: default
+          vpc_inet: yes
+          vpc_inet_capacity: 10m
+          ssh_keys:
+            - Xiaohui-GRAYPC
+          volumes:
+            - name: test-hd-1
+            - test-hd-2
+          present: yes
+  tasks:
+    - debug: msg={{npc}}
 EOF
+
+
 
 
 # npc playbook --setup <<EOF

@@ -27,7 +27,7 @@ MAPPER_PRE_LOAD_INSTANCE='{
 		actual_type: { cpu:.vcpu, memory:"\(.memory_gb)G"}
 	}'
 MAPPER_LOAD_INSTANCE='. + (if .volumes then
-			{volumes: ((.volumes//{}) * (.actual_volumes//{})|with_entries(select(.value.present)))}
+			{volumes: ((.volumes//{}) * (.actual_volumes//{}))}
 		else {} end)
 	| . + {ssh_key_file:(.ssh_key_file//.default_ssh_key_file)}
 	| . + (if (.wan_ip=="new" or .wan_ip==true or .wan_ip=="any") and .actual_wan_ip then 
@@ -41,7 +41,7 @@ FILTER_PLAN_VOLUMES='. + (if .volumes then
 			* (.actual_volumes//{} | with_entries(.value |= . + {actual_present: true})) 
 			| with_entries(.value |= . + {
 				mount: ((.actual_present|not) and .present), 
-				unmount: (.actual_present and (.present|not)) 
+				unmount: (.actual_present and (.present == false)) 
 			})
 		)}
 	else {} end)'
@@ -58,7 +58,9 @@ init_instances(){
 			<(load_instances "$MAPPER_PRE_LOAD_INSTANCE"'
 					| if '"$FILTER_INSTANCE_STATUS"' then . else . + {error: "\(.name): status=\(.status), lan_ip=\(.lan_ip)"} end						
 				'|| >>$STAGE.error) \
-			'. + (if .volumes then {volumes: (.volumes|map({ key: ., value: {name:., present: true}})|from_entries)} else {} end)
+			'. + (if .volumes then {volumes: (.volumes|map(
+					if (strings//false) then { key:., value: {name:., present: true}} else { key: .name, value: ({present: true} + .) } end
+					)|from_entries)} else {} end)
 			|'"$MAPPER_LOAD_INSTANCE"'
 			|. + (if .wan_ip then
 					if .actual_wan_ip|not then
@@ -401,3 +403,11 @@ instances_lookup(){
  	echo "[ERROR] instance '$INSTANCE' not found" >&2
  	return 1
 }
+
+report_filters 'if .instances then 
+		.instances |= map_values(
+			if .volumes then 
+				(.volumes |= with_entries(select(.value.present))) 
+			else . end 
+		) 
+	else . end'

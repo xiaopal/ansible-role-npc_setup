@@ -17,6 +17,7 @@ npc_setup_options:
   app_key: '{{npc_setup_effective.app_key | default(lookup("env","NPC_API_KEY"),true) | default("",true)}}'
   app_secret: '{{npc_setup_effective.app_secret | default(lookup("env","NPC_API_SECRET"),true) | default("",true)}}'
   api_endpoint: '{{npc_setup_effective.api_endpoint | default(lookup("env","NPC_API_ENDPOINT"),true) | default("",true)}}'
+  region: '{{npc_setup_effective.region | default(lookup("env","NPC_API_REGION"),true) | default("",true)}}'
 
   actions: '{{ npc_setup_effective.actions | default(npc_setup_actions, true) | default([], true) }}'
   action_focks: '{{npc_setup_effective.action_focks | default(lookup("env","NPC_ACTION_FORKS"),true) | default(5,true)}}'

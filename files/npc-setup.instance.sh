@@ -142,7 +142,7 @@ instances_prepare(){
 			echo '[ERROR] instance_image required.' >&2
 			return 1
 		} 
-		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
+		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME" | head -1)" && [ ! -z "$IMAGE_ID" ] || return 1
 
 		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys || return 1
 	}

@@ -103,7 +103,11 @@ instances_lookup_image(){
 			}
 		)
 		[ -f $STAGE ] && IMAGE_NAME="$IMAGE_NAME" \
-			jq -re '.[]|select(.imageName==env.IMAGE_NAME or .imageId==env.IMAGE_NAME)|.imageId' $STAGE	\
+			jq -re '(env.IMAGE_NAME | capture("^/(?<regex>.+)/(?<flags>[a-z]+)?$|^(?<text>.+)$")) as $lookup
+				|map(select(
+					($lookup.text and (.imageName==$lookup.text or .imageId==$lookup.text)) or
+					($lookup.regex and (.imageName | test($lookup.regex;$lookup.flags))) ))
+				|.[0]//empty|.imageId//empty' $STAGE	\
 			&& return 0
 	done
 	echo "[ERROR] instance_image - '$IMAGE_NAME' not found" >&2
@@ -142,7 +146,7 @@ instances_prepare(){
 			echo '[ERROR] instance_image required.' >&2
 			return 1
 		} 
-		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME" | head -1)" && [ ! -z "$IMAGE_ID" ] || return 1
+		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
 
 		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys || return 1
 	}

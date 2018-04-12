@@ -163,7 +163,7 @@ EOF
 
 ```
 
-## 支持VPC (NEW)
+## 支持VPC 
 ```
 # npc playbook -<<EOF
 ---
@@ -240,5 +240,56 @@ npc_vpc_networks:
             via_instance: vpc-instance-01
 
 EOF
+
+```
+
+
+## 支持新版OpenAPI虚拟机规格及DNS托管域（NEW）
+```
+# npc playbook -<<EOF
+---
+- hosts: localhost
+  gather_facts: no
+  roles:
+    - role: xiaopal.npc_setup
+      npc_dns_zones:
+        - name: in-addr.arpa
+          fallthrough: yes
+          vpc: defaultVPCNetwork
+        - name: example.com
+          vpc: defaultVPCNetwork
+      npc_instances:
+        - name: test-vm
+          present: no
+        - name: test-vm-1
+          zone: cn-east-1b
+          instance_type: {spec: "nvm.e2.large8"}
+          instance_image: Debian 8.6
+          vpc: defaultVPCNetwork
+          vpc_subnet: default
+          vpc_security_group: default
+          vpc_inet: yes
+          vpc_inet_capacity: 10m
+          dns_zone: example.com
+          reverse_dns_zone: in-addr.arpa
+          ssh_keys:
+            - Xiaohui-GRAYPC
+          present: yes
+        - name: test-vm-2
+          zone: cn-east-1b
+          instance_type: {"cpu":4,"memory":"8G","series":2,"type":2}
+          instance_image: Debian 8.6
+          vpc: defaultVPCNetwork
+          vpc_subnet: default
+          vpc_security_group: default
+          vpc_inet: yes
+          vpc_inet_capacity: 10m
+          ssh_keys:
+            - Xiaohui-GRAYPC
+          present: yes
+  tasks:
+    - debug: msg={{npc}}
+EOF
+
 
 ```

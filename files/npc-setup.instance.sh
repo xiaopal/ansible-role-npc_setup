@@ -140,7 +140,7 @@ instances_prepare(){
 	local INSTANCE="$1" 
 	jq -ce 'select(.prepared)'<<<"$INSTANCE" && return 0
 
-	local IMAGE_ID
+	local IMAGE_ID INSTANCE_TYPE_CONFIG="{}" SSH_KEYS_CONFIG="{}"
 	jq_check '.create or .recreate'<<<"$INSTANCE" && {
 		local IMAGE_NAME="$(jq -r '.instance_image//.default_instance_image//empty'<<<"$INSTANCE")" && [ ! -z "$IMAGE_NAME" ] || {
 			echo '[ERROR] instance_image required.' >&2
@@ -148,7 +148,12 @@ instances_prepare(){
 		} 
 		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
 
-		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys || return 1
+		INSTANCE_TYPE_CONFIG="$(instance_type_normalize "$(jq -c '.instance_type//empty'<<<"$INSTANCE")" '{instance_type: .}')"
+		[ ! -z "$INSTANCE_TYPE_CONFIG" ] || return 1
+
+		jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys && \
+		SSH_KEYS_CONFIG="$(jq -r '.ssh_keys//empty|.[]'<<<"$INSTANCE" | check_ssh_keys --output '.' | jq -sc '{checked_ssh_keys: .}')" && \
+		[ ! -z "$SSH_KEYS_CONFIG" ] || return 1
 	}
 	
 	jq_check '.volumes'<<<"$INSTANCE" && while read -r VOLUME; do
@@ -181,12 +186,20 @@ instances_prepare(){
 			vpc_security_group: env.VPC_SECURITY_GROUP
 			}')"
 	}
-	
+
+	local DNS_ZONE="$(jq -r '.dns_zone//empty'<<<"$INSTANCE")" DNS_ZONE_CONFIG='{}' && [ ! -z "$DNS_ZONE" ] && {
+		DNS_ZONE_CONFIG="$(dns_zones_lookup "$DNS_ZONE" "{dns_zone: .HostedZoneId}")" && [ ! -z "$DNS_ZONE_CONFIG" ] || return 1
+	}
+
+	local REVERSE_ZONE="$(jq -r '.reverse_dns_zone//empty'<<<"$INSTANCE")" REVERSE_ZONE_CONFIG='{}' && [ ! -z "$REVERSE_ZONE" ] && {
+		REVERSE_ZONE_CONFIG="$(dns_zones_lookup "$REVERSE_ZONE" "{reverse_dns_zone: .HostedZoneId}")" && [ ! -z "$REVERSE_ZONE_CONFIG" ] || return 1
+	}
+
 	IMAGE_ID="$IMAGE_ID" \
 	jq -c '. + {
 		prepared: true,
 		instance_image_id: env.IMAGE_ID
-	}'"+$WAN_CONFIG""+$VPC_CONFIG"<<<"$INSTANCE" && return 0 || return 1
+	}'" +$INSTANCE_TYPE_CONFIG +$WAN_CONFIG +$VPC_CONFIG +$SSH_KEYS_CONFIG +$DNS_ZONE_CONFIG +$REVERSE_ZONE_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
 instances_wait_instance(){
@@ -207,34 +220,9 @@ instances_wait_instance(){
 
 instances_create(){
 	local INSTANCE="$(instances_prepare "$1")" RESULT="$2" CTX="$3" && [ -z "$INSTANCE" ] && return 1
-	local CREATE_INSTANCE="$(jq -c '{
-			bill_info: "HOUR",
-			server_info: ({
-				azCode: (.zone//.az),
-				instance_name: .name,
-				ssh_key_names: (.ssh_keys//[]),
-				image_id: .instance_image_id,
-				cpu_weight: (.instance_type.cpu//0),
-				memory_weight: ((.instance_type.memory//"0G")|sub("[Gg]$"; "")|tonumber),
-				ssd_weight: ((.instance_type.ssd//"20G")|sub("[Gg]$"; "")|tonumber),
-				type: (.instance_type.type//.default_instance_type.type),
-				series: (.instance_type.series//.default_instance_type.series),
-
-				useVPC: (if .vpc_network then true else false end),
-				networkId: (if .vpc_network then .vpc_network else false end),
-				subnetId: (if .vpc_network then .vpc_subnet else false end),
-				securityGroup:(if .vpc_network then .vpc_security_group else false end),
-				usePrivateIP: (if .vpc_network and .vpc_corp then true else false end),
-				useLifeCycleIP: (if .vpc_network and .vpc_inet then true else false end),
-				bandwidth: (if .vpc_network and .vpc_inet then
-						(.vpc_inet_capacity//"1M"|sub("[Mm]$"; "")|tonumber)
-					else false end),
-
-				description: (.description//"created by npc-setup")
-			} | with_entries(select(.value)))
-		}'<<<"$INSTANCE")"
+	local API_CREATE='api_create_instance'; jq_check '.vpc_network'<<<"$INSTANCE" && API_CREATE='api2_create_instance'
 	while true; do
-		local RESPONSE="$(api_create_instance "$CREATE_INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1
+		local RESPONSE="$("$API_CREATE" "$INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1
 		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
 			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
 			&& {
@@ -262,7 +250,30 @@ instances_create(){
 }
 
 api_create_instance(){
-	local CREATE_INSTANCE="$1"
+	local INSTANCE="$1" && local CREATE_INSTANCE="$(jq -c '{
+			bill_info: "HOUR",
+			server_info: ({
+				azCode: (.zone//.az),
+				instance_name: .name,
+				ssh_key_names: (.ssh_keys//[]),
+				image_id: .instance_image_id,
+				cpu_weight: (.instance_type.cpu//0),
+				memory_weight: ((.instance_type.memory//"0G")|sub("[Gg]$"; "")|tonumber),
+				ssd_weight: ((.instance_type.ssd//"20G")|sub("[Gg]$"; "")|tonumber),
+				type: (.instance_type.type//.default_instance_type.type),
+				series: (.instance_type.series//.default_instance_type.series),
+				useVPC: (if .vpc_network then true else false end),
+				networkId: (if .vpc_network then .vpc_network else false end),
+				subnetId: (if .vpc_network then .vpc_subnet else false end),
+				securityGroup:(if .vpc_network then .vpc_security_group else false end),
+				usePrivateIP: (if .vpc_network and .vpc_corp then true else false end),
+				useLifeCycleIP: (if .vpc_network and .vpc_inet then true else false end),
+				bandwidth: (if .vpc_network and .vpc_inet then
+						(.vpc_inet_capacity//"1M"|sub("[Mm]$"; "")|tonumber)
+					else false end),
+				description: (.description//"created by npc-setup")
+			} | with_entries(select(.value)))
+		}'<<<"$INSTANCE")"
 	(
 		exec 100>$NPC_STAGE/instances.create_lock && flock 100
 		local RESPONSE="$(npc api --error 'json|((arrays|{id:.[0]})//{})+(objects//{})' POST /api/v1/vm "$CREATE_INSTANCE")" \
@@ -272,6 +283,45 @@ api_create_instance(){
 			&& [ ! -z "$INSTANCE_ID" ] 
 			# \
 			#&& sleep 1s; # 等待1秒,避免 Api freq out of limit
+	)	
+}
+
+api2_create_instance(){
+	local INSTANCE="$1" && local CREATE_INSTANCE="$(jq -c '{
+			PayType: "PostPaid",
+			InstanceName: .name,
+			ImageId: .instance_image_id,
+			SpecType: .instance_type.spec,
+			KeyPairNames: (.checked_ssh_keys|map({name:.name, fingerprint: .fingerprint})),
+			Placement: ({
+				ZoneId: (.zone//.az)
+				}|with_entries(select(.value))),
+			VirtualPrivateCloud: ({
+				VpcId: .vpc_network,
+				SubnetId: (if .vpc_network then .vpc_subnet else false end)
+				}|with_entries(select(.value))),
+			SecurityGroupIds: (if .vpc_network then [.vpc_security_group] else [] end),
+			AssociatePublicIpAddress: (if .vpc_network and .vpc_inet then true else false end),
+			InternetMaxBandwidth: (if .vpc_network and .vpc_inet then
+					(.vpc_inet_capacity//"1M"|sub("[Mm]$"; "")|tonumber)
+				else false end),
+			NetworkChargeType: (if .vpc_network and .vpc_inet then "TRAFFIC" else false end),
+			AssociatePrivateIdcIpAddress: (if .vpc_network and .vpc_corp then true else false end),
+			DnsZoneId: .dns_zone,
+			ReverseZoneId: .reverse_dns_zone, 
+			Personality: (.user_data//{} | to_entries | map({ 
+				Path: .key, 
+				Contents: .value 
+				}) | select(length > 0) // false),
+			DataVolumes: (.data_volumes//[] | map({ 
+				VolumeType: (.type//"EPHEMERAL"), 
+				VolumeSize: (.capacity|sub("[Gg]$"; "")|tonumber) 
+				}) | select(length > 0) // false),
+			Description: .description
+		} | with_entries(select(.value))'<<<"$INSTANCE")"
+	(
+		export INSTANCE_ID="$(NPC_API_LOCK="$NPC_STAGE/instances.create_lock" checked_api2 '.Instances//[]|.[0]//empty' POST "/nvm?Action=CreateInstance&Version=2017-12-14" "$CREATE_INSTANCE")" \
+			&& [ ! -z "$INSTANCE_ID" ] && jq -nr '{ id: env.INSTANCE_ID }'
 	)	
 }
 

@@ -134,8 +134,10 @@ SCRIPT="${BASH_SOURCE[0]}" && [ -L "$SCRIPT" ] && SCRIPT="$(readlink -f "$SCRIPT
 SCRIPT_DIR="$(cd "$(dirname $SCRIPT)"; pwd)" 
 . $SCRIPT_DIR/npc-setup.ctx.sh \
 	&& . $SCRIPT_DIR/npc-setup.ssh_key.sh \
+	&& . $SCRIPT_DIR/npc-setup.instance_type.sh \
 	&& . $SCRIPT_DIR/npc-setup.image.sh \
 	&& . $SCRIPT_DIR/npc-setup.vpc.sh \
+	&& . $SCRIPT_DIR/npc-setup.dns_zone.sh \
 	&& . $SCRIPT_DIR/npc-setup.volume.sh \
 	&& . $SCRIPT_DIR/npc-setup.instance.sh \
 	&& . $SCRIPT_DIR/npc-setup.vpc_route.sh \

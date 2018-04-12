@@ -7,7 +7,7 @@ ssh_key_fingerprint(){
 }
 
 check_ssh_keys(){
-	local STAGE="$NPC_STAGE/ssh_keys" FORCE_CREATE CHECK_FILE
+	local STAGE="$NPC_STAGE/ssh_keys" FORCE_CREATE CHECK_FILE OUTPUT_FILTER
 	while ARG="$1" && shift; do
 		case "$ARG" in
 			--check-file)
@@ -16,6 +16,9 @@ check_ssh_keys(){
 			--create)
 				FORCE_CREATE=Y
 				CHECK_FILE=Y
+				;;
+			--output)
+				OUTPUT_FILTER="$1" && shift
 				;;
 		esac
 	done
@@ -31,6 +34,7 @@ check_ssh_keys(){
 			local STAGE_SSH_KEY="$(jq -c --arg ssh_key "$SSH_KEY" '.[$ssh_key]//empty' $STAGE)" \
 				SSH_KEY_FILE="$(cd ~; pwd)/.npc/ssh_key.$SSH_KEY"
 			[ ! -z "$STAGE_SSH_KEY" ] && {
+				[ ! -z "$OUTPUT_FILTER" ] && jq -cr "$OUTPUT_FILTER"<<<"$STAGE_SSH_KEY"
 				[ ! -z "$CHECK_FILE" ] || exit 0
 				[ -f "$SSH_KEY_FILE" ] \
 					&& [ "$(ssh_key_fingerprint "$SSH_KEY_FILE")" = "$(jq -r '.fingerprint'<<<"$STAGE_SSH_KEY")" ] \
@@ -51,7 +55,10 @@ check_ssh_keys(){
 					rm -f $STAGE && mkdir -p "$(dirname "$SSH_KEY_FILE")"
 					STAGE_SSH_KEY="$(npc api 'json|select(.id and .fingerprint)' \
 						POST /api/v1/secret-keys "$(jq -Rc "{key_name:.}"<<<"$SSH_KEY")")"
-					[ ! -z "$STAGE_SSH_KEY" ] && SSH_KEY_ID="$(jq -r '.id'<<<"$STAGE_SSH_KEY")" || {
+					[ ! -z "$STAGE_SSH_KEY" ] && { 
+						[ ! -z "$OUTPUT_FILTER" ] && jq -cr "$OUTPUT_FILTER"<<<"$STAGE_SSH_KEY"
+						SSH_KEY_ID="$(jq -r '.id'<<<"$STAGE_SSH_KEY")" 
+					} || {
 						echo "[ERROR] Failed to create ssh_key '$SSH_KEY'" >&2
 					}
 				}

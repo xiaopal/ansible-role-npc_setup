@@ -212,7 +212,7 @@ checked_api(){
 		}
 	}
 	if [ ! -z "$FILTER" ]; then
-		jq -ce "($FILTER)//empty" <<<"$RESPONSE" && return 0
+		jq -cre "($FILTER)//empty" <<<"$RESPONSE" && return 0
 	else
 		jq_check '.' <<<"$RESPONSE" && return 0
 	fi

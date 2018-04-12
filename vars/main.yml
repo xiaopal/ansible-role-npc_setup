@@ -12,6 +12,8 @@ npc_setup_resources:
   npc_volumes: '{{ npc_setup_effective.volumes | default(npc_volumes, true) | default(false) }}'
   npc_instances: '{{ npc_setup_effective.instances | default(npc_instances, true) | default(false) }}'
   npc_vpc_routes: '{{ npc_setup_effective.vpc_routes | default(npc_vpc_routes, true) | default(false) }}'
+  npc_instance_type_specs: '{{ npc_setup_effective.instance_type_specs | default(npc_instance_type_specs, true) | default(false) }}'
+  npc_dns_zones: '{{ npc_setup_effective.dns_zones | default(npc_dns_zones, true) | default(false) }}'
 
 npc_setup_options:
   app_key: '{{npc_setup_effective.app_key | default(lookup("env","NPC_API_KEY"),true) | default("",true)}}'

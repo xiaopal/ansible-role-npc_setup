@@ -1,6 +1,7 @@
 #! /bin/bash
 
 setup_resources "dns_zones"
+JQ_DNS_ZONES='.npc_dns_zones[]?'
 
 dns_zones_lookup(){
 	local DNS_ZONE="$1" FILTER="${2:-.HostedZoneId}" STAGE="$NPC_STAGE/dns_zones.lookup"
@@ -17,7 +18,7 @@ dns_zones_lookup(){
  }
 
 init_dns_zones(){
-	local INPUT="$1" STAGE="$2" JQ_DNS_ZONES='.npc_dns_zones[]?' LOAD_FILTER='{
+	local INPUT="$1" STAGE="$2" LOAD_FILTER='{
 		name: .Name,
 		id: .HostedZoneId
 	}'

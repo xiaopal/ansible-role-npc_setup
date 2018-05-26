@@ -26,19 +26,26 @@ jq_check(){
 
 expand_resources(){
 	local LINE KEY FILTER="${1:-.}" KEY_ATTR="${EXPAND_KEY_ATTR:-name}"
+	dump_str_vals(){
+		local ARG; for ARG in "$@"; do echo "$# $ARG"; done
+	}
 	while read -r LINE; do
 		local KEYS=($(eval "echo $(jq -r ".$KEY_ATTR"'|gsub("^\\*\\:|[\\s\\$]"; "")'<<<"$LINE")")) KEY_INDEX=0
 		for KEY in "${KEYS[@]}"; do
 			[ ! -z "$KEY" ] || continue
 			while read -r STM_LINE; do 
-				jq_check 'length>1 and (.[1]|strings|startswith("*:"))'<<<"$STM_LINE" || {
+				local STM_VAL_JQ STM_VAL STM_VAL_COUNT STM_VAL_INDEX=0
+				if jq_check 'length>1 and (.[1]|strings|startswith("*:"))'<<<"$STM_LINE"; then
+					STM_VAL_JQ='.[1]|gsub("^\\*\\:|[\\s\\$]"; "")'
+				elif jq_check 'length>1 and (.[1]|strings|startswith("@:"))'<<<"$STM_LINE"; then
+					STM_VAL_JQ='.[1]|gsub("^\\@\\:"; "")|gsub("(?<c>[\\s\\$\\*])";"\\\(.c)")'
+				else
 					echo "$STM_LINE" && continue
-				}
-				local STM_VALS=($(eval "echo $(jq -r '.[1]|gsub("^\\*\\:|[\\s\\$]"; "")'<<<"$STM_LINE")")) STM_VAL_INDEX=0
-				for STM_VAL in "${STM_VALS[@]}"; do
-					(( STM_VAL_INDEX++ == KEY_INDEX % ${#STM_VALS[@]} )) \
+				fi
+				while read -r STM_VAL_COUNT STM_VAL; do
+					(( STM_VAL_INDEX++ == KEY_INDEX % STM_VAL_COUNT )) \
 						&& STM_VAL="$STM_VAL" jq -c '[.[0],env.STM_VAL]' <<<"$STM_LINE"
-				done 
+				done < <(eval dump_str_vals $(jq -r "$STM_VAL_JQ"<<<"$STM_LINE"))
 			done < <(KEY="$KEY" jq --argjson index "$((KEY_INDEX))" -c ". + {$KEY_ATTR:env.KEY, ${KEY_ATTR}_index:\$index}|tostream"<<<"$LINE") \
 				| jq -s 'fromstream(.[])'; ((KEY_INDEX++))
 		done

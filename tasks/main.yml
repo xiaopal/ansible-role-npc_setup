@@ -11,6 +11,8 @@
       with_fileglob:
         - npc-setup.sh
         - npc-playbook.sh
+    - copy: content={{npc_setup_resources | to_json}} dest={{playbook_dir}}/.npc-setup.input
+      changed_when: false
 
 - name: npc setup
   shell: npc setup
@@ -20,7 +22,7 @@
     {% for action in npc_setup_options.actions %}
       --{{ action }}
     {% endfor %}
-    {{ npc_setup_resources | to_json | quote }}
+    @.npc-setup.input
     {% if npc_setup_options.log | length > 0 %}
       2>> {{ npc_setup_options.log | quote }}
     {% endif %}
@@ -36,6 +38,9 @@
     NPC_ACTION_PULL_SECONDS: "{{ npc_setup_options.action_pull_interval }}"
     NPC_ACTION_RETRY_SECONDS: "{{ npc_setup_options.action_retry_interval }}"
   register: npc_execution
+  changed_when: false
+
+- file: state=absent dest={{playbook_dir}}/.npc-setup.input
   changed_when: false
 
 - name: export 'npc'

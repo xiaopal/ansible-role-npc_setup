@@ -259,8 +259,6 @@ EOF
         - name: example.com
           vpc: defaultVPCNetwork
       npc_instances:
-        - name: test-vm
-          present: no
         - name: test-vm-1
           zone: cn-east-1b
           instance_type: {spec: "nvm.e2.large8"}
@@ -287,6 +285,66 @@ EOF
           ssh_keys:
             - Xiaohui-GRAYPC
           present: yes
+  tasks:
+    - debug: msg={{npc}}
+EOF
+
+```
+
+
+## 支持新版OpenAPI DNS资源记录集创建（NEW）
+```
+# npc playbook -<<EOF
+---
+- hosts: localhost
+  gather_facts: no
+  roles:
+    - role: xiaopal.npc_setup
+      npc_dns_record_sets:
+        - record_set: A, test{1..100}.example.com @example.com
+          ttl: 3600
+          records: 
+            - '*:1.1.1.{1..100}'
+        - record_set: A, test.example.com @example.com
+          absent_records: 
+            - 1.1.1.1
+          present_records: 
+            - 2.2.2.2
+        - record_set: CNAME, t{1..100}.example.com, 3600 @example.com
+          present_records: 
+            - test.example.com
+        - record_set: SRV, _t{1..100}._tcp.example.com, 3600 @example.com
+          records: 
+            - '@:1 0 8888 test{1..100}.example.com'
+  tasks:
+    - debug: msg={{npc}}
+EOF
+
+# npc playbook -<<EOF
+---
+- hosts: localhost
+  gather_facts: no
+  roles:
+    - role: xiaopal.npc_setup
+      npc_dns_zones:
+        - name: example.com
+          vpc: defaultVPCNetwork
+          record_sets:
+            - record_set: A, test{1..100}.example.com
+              records: 
+                - '*:1.1.1.{1..100}'
+            - record_set: A, test.example.com
+              absent_records: 
+                - 1.1.1.1
+              present_records: 
+                - 2.2.2.2
+            - record_set: CNAME, t{1..100}.example.com
+              present_records: 
+                - test.example.com
+            - record_set: SRV, _t{1..100}._tcp.example.com, 60
+              records: 
+                - '@:1 0 8888 test{1..100}.example.com'
+          
   tasks:
     - debug: msg={{npc}}
 EOF

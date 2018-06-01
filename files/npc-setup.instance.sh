@@ -145,7 +145,7 @@ instances_prepare(){
 		local IMAGE_NAME="$(jq -r '.instance_image//.default_instance_image//empty'<<<"$INSTANCE")" && [ ! -z "$IMAGE_NAME" ] || {
 			echo '[ERROR] instance_image required.' >&2
 			return 1
-		} 
+		}
 		IMAGE_ID="$(instances_lookup_image "$IMAGE_NAME")" && [ ! -z "$IMAGE_ID" ] || return 1
 
 		INSTANCE_TYPE_CONFIG="$(instance_type_normalize "$(jq -c '.instance_type//empty'<<<"$INSTANCE")" '{instance_type: .}')"
@@ -156,11 +156,16 @@ instances_prepare(){
 		[ ! -z "$SSH_KEYS_CONFIG" ] || return 1
 	}
 	
-	jq_check '.volumes'<<<"$INSTANCE" && while read -r VOLUME; do
-		jq_check '.present'<<<"$VOLUME" && {
-			volumes_lookup "$(jq -r '.name'<<<"$VOLUME")">/dev/null || return 1 
-		}
-	done < <(jq -c '.volumes[]'<<<"$INSTANCE")
+	local PLAN_VOLUMES PLAN_VOLUMES_CONFIG='{}'
+	jq_check '.plan_volumes'<<<"$INSTANCE" && {
+		while read -r VOLUME; do
+			local VOLUME_NAME="$(jq -r '.name'<<<"$VOLUME")"
+			local VOLUME_ID="$(volumes_lookup "$VOLUME_NAME" '.id')" && [ ! -z "$VOLUME_ID" ] || return 1
+			[ ! -z "$PLAN_VOLUMES" ] || PLAN_VOLUMES="$(jq -c '.plan_volumes//empty'<<<"$INSTANCE")"
+			PLAN_VOLUMES="$(export VOLUME_NAME VOLUME_ID; jq -c '.[env.VOLUME_NAME] |= . + {id: env.VOLUME_ID}'<<<"$PLAN_VOLUMES")"
+		done < <(jq -c '.plan_volumes[]|select(.present and (.volume_uuid|not))'<<<"$INSTANCE")
+		[ ! -z "$PLAN_VOLUMES" ] && PLAN_VOLUMES_CONFIG="$(jq -c '{plan_volumes: .}'<<<"$PLAN_VOLUMES")"
+	}
 
 	local WAN_IP
 	jq_check '.plan_wan_ip and .plan_wan_ip.bind and (.plan_wan_ip.rebind|not)'<<<"$INSTANCE" && {
@@ -199,7 +204,7 @@ instances_prepare(){
 	jq -c '. + {
 		prepared: true,
 		instance_image_id: env.IMAGE_ID
-	}'" +$INSTANCE_TYPE_CONFIG +$WAN_CONFIG +$VPC_CONFIG +$SSH_KEYS_CONFIG +$DNS_ZONE_CONFIG +$REVERSE_ZONE_CONFIG"<<<"$INSTANCE" && return 0 || return 1
+	}'" +$INSTANCE_TYPE_CONFIG +$PLAN_VOLUMES_CONFIG +$WAN_CONFIG +$VPC_CONFIG +$SSH_KEYS_CONFIG +$DNS_ZONE_CONFIG +$REVERSE_ZONE_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
 instances_wait_instance(){
@@ -220,15 +225,20 @@ instances_wait_instance(){
 
 instances_create(){
 	local INSTANCE="$(instances_prepare "$1")" RESULT="$2" CTX="$3" && [ -z "$INSTANCE" ] && return 1
-	local API_CREATE='api_create_instance'; jq_check '.vpc_network'<<<"$INSTANCE" && API_CREATE='api2_create_instance'
+	local API2_CREATE='' API_CREATE='api_create_instance'; jq_check '.vpc_network'<<<"$INSTANCE" && {
+		API2_CREATE='api2_create_instance'
+		API_CREATE="$API2_CREATE"
+	}
 	while true; do
-		local RESPONSE="$("$API_CREATE" "$INSTANCE")" && [ ! -z "$RESPONSE" ] || return 1
+		local RESPONSE="$("$API_CREATE" "$INSTANCE" "$CTX")" && [ ! -z "$RESPONSE" ] || return 1
 		local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
 			&& instances_wait_instance "$INSTANCE_ID" "$CTX" \
 			&& {
 				echo "[INFO] instance '$INSTANCE_ID' created." >&2 
-				instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
-				instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+				[ ! -z "$API2_CREATE" ] || {
+					instances_update_volumes "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+					instances_update_wan "$INSTANCE_ID" "$INSTANCE" "$CTX" || return 1
+				}
 				instances_wait_instance "$INSTANCE_ID" "$CTX" \
 					--argjson instance "$INSTANCE" "$FILTER_LOAD_INSTANCE" --out $RESULT || return 1
 				return 0
@@ -287,7 +297,22 @@ api_create_instance(){
 }
 
 api2_create_instance(){
-	local INSTANCE="$1" && local CREATE_INSTANCE="$(jq -c '{
+	local INSTANCE="$1" CTX="$2" PLAN_VOLUME
+
+	jq_check '.plan_volumes'<<<"$INSTANCE" && while read -r PLAN_VOLUME; do
+		local VOLUME_NAME="$(jq -r '.name'<<<"$PLAN_VOLUME")" VOLUME_ID="$(jq -r '.id'<<<"$PLAN_VOLUME")"
+		[ ! -z "$VOLUME_NAME" ] && [ ! -z "$VOLUME_ID" ] || {
+			echo "[ERROR] invalid instance volume '$PLAN_VOLUME'." >&2 
+			return 1
+		}
+		local VOLUME="$(volumes_wait_status "$VOLUME_ID" "$CTX" '.')" && [ ! -z "$VOLUME" ] || return 1
+		jq_check '.available'<<<"$VOLUME" || {
+			echo "[ERROR] volume '$VOLUME_NAME' not available" >&2 
+			return 1
+		}
+	done < <(jq -c '.plan_volumes[]|select(.present)'<<<"$INSTANCE")
+	
+	local CREATE_INSTANCE="$(jq -c '{
 			PayType: "PostPaid",
 			InstanceName: .name,
 			ImageId: .instance_image_id,
@@ -317,6 +342,7 @@ api2_create_instance(){
 				VolumeType: (.type//"EPHEMERAL"), 
 				VolumeSize: (.capacity|sub("[Gg]$"; "")|tonumber) 
 				}) | select(length > 0) // false),
+			AttachVolumeIds: (if .plan_volumes then (.plan_volumes|map(select(.present)|.id)) else false end),
 			Description: .description
 		} | with_entries(select(.value))'<<<"$INSTANCE")"
 	(

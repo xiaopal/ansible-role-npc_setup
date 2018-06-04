@@ -208,9 +208,10 @@ checked_api(){
 
 	local DO_API=(npc ${NPC_API:-api})
 	[ ! -z "$NPC_API_LOCK" ] && DO_API=('flock' "$NPC_API_LOCK" "${DO_API[@]}")
-	local RESPONSE="$("${DO_API[@]}" --error "${ARGS[@]}" && \
+	[ ! -z "$NPC_API_SUCCEED_NO_RESPONSE" ] || ARGS=(--error "${ARGS[@]}") 
+	local RESPONSE="$("${DO_API[@]}" "${ARGS[@]}" && \
 		[ ! -z "$NPC_API_SUCCEED_NO_RESPONSE" ] && echo '{"ok":"no response"}' )" && [ ! -z "$RESPONSE" ] || {
-		[ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] No response." >&2
+		[ ! -z "$OPTION_SILENCE" ] || [ ! -z "$NPC_API_SUCCEED_NO_RESPONSE" ] || echo "[ERROR] No response." >&2
 		return 1
 	}
 	[ "${NPC_API:-api}" == "api" ] && {

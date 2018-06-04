@@ -17,7 +17,7 @@ npc_setup_resources:
   npc_dns_record_sets: '{{ npc_setup_effective.dns_record_sets | default(npc_dns_record_sets, true) | default(false) }}'
   npc_load_balancings: '{{ npc_setup_effective.load_balancings | default(npc_load_balancings, true) | default(false) }}'
   npc_load_balancing_listeners: '{{ npc_setup_effective.load_balancing_listeners | default(npc_load_balancing_listeners, true) | default(false) }}'
-  npc_load_balancing_targets: '{{ npc_setup_effective.load_balancing_targets | default(npc_load_balancing_targets, true) | default(false) }}'
+  npc_load_balancing_target_groups: '{{ npc_setup_effective.load_balancing_target_groups | default(npc_load_balancing_target_groups, true) | default(false) }}'
 
 npc_setup_options:
   app_key: '{{npc_setup_effective.app_key | default(lookup("env","NPC_API_KEY"),true) | default("",true)}}'

@@ -386,15 +386,15 @@ npc_load_balancings:
     vpc_security_group: default
     capacity: 10m
     present: yes
-    targets:
-      - target: test-target-1
-        members:
-          - member: test-vm/8888
-      - target: test-target-{2,3}
-        absent_members:
-          - member: test-vm/4444
-        present_members:
-          - member: test-vm/8888
+    target_groups:
+      - target_group: test-target-1
+        targets:
+          - test-vm/8888
+      - target_group: test-target-{2,3}
+        absent_targets:
+          - test-vm/4444
+        present_targets:
+          - test-vm/8888
 EOF
 
 ```

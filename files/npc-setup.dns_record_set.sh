@@ -50,9 +50,12 @@ init_dns_record_sets(){
 						+ (.present_records//[])) }
 				else {} end) 
 			| . + (if (.create or .update) and (.records | length == 0) then { present: false, destroy: .update, create: false, update: false} else {} end)
-			| . + {update: (.update and ((.records and ((
-					.actual_records - (.records|map(., sub("\\.*$"; "."))) + .records
-					)|sort) != (.records|sort)) or (.ttl and .ttl != .actual_ttl))) }' || return 1
+			| . + {update: (.update and (
+				(.records and ( 
+					(.actual_records|length) == (.records|length) and 
+					(.actual_records - (.records|map(., sub("\\.*$"; "."))) + .records|sort) == (.records|sort)
+					| not ) ) or 
+				(.ttl and .ttl != .actual_ttl))) }' || return 1
 	return 0
 }
 

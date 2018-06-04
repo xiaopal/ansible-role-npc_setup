@@ -6,7 +6,9 @@ SETUP_PLAYBOOK_YAML='---
   roles: 
     - xiaopal.npc_setup
   pre_tasks:
-    - include_vars: setup-vars.yml'
+    - include_vars: setup-vars.yml
+  tasks:
+    - debug: msg={{npc}}'
 
 do_playbook(){
 	local NPC_SETUP_TMP="$(mktemp -d)" && trap "rm -fr '$NPC_SETUP_TMP'" EXIT

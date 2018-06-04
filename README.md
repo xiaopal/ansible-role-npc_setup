@@ -349,5 +349,52 @@ EOF
     - debug: msg={{npc}}
 EOF
 
+```
+
+# 云主机负载均衡（NEW）
+```
+# npc playbook --setup <<EOF
+---
+npc_load_balancings:
+  - name: lb-test
+    vpc: defaultVPCNetwork
+    vpc_subnet: default
+    vpc_security_group: default
+    capacity: 10m
+    present: yes
+EOF
+
+# npc playbook --setup <<EOF
+---
+npc_instances:
+  - name: test-vm
+    zone: cn-east-1b
+    instance_type: {series: 2, type: 2, cpu: 4, memory: 8G}
+    instance_image: Debian 8.6
+    vpc: defaultVPCNetwork
+    vpc_subnet: default
+    vpc_security_group: default
+    vpc_inet: yes
+    vpc_inet_capacity: 10m
+    ssh_keys:
+      - Xiaohui-GRAYPC
+    present: yes
+npc_load_balancings:
+  - name: lb-test
+    vpc: defaultVPCNetwork
+    vpc_subnet: default
+    vpc_security_group: default
+    capacity: 10m
+    present: yes
+    targets:
+      - target: test-target-1
+        members:
+          - member: test-vm/8888
+      - target: test-target-{2,3}
+        absent_members:
+          - member: test-vm/4444
+        present_members:
+          - member: test-vm/8888
+EOF
 
 ```

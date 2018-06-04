@@ -7,6 +7,7 @@ MAPPER_PRE_LOAD_INSTANCE='{
 		name: .name,
 		status: .status,
 		lan_ip: .vnet_ip,
+		zone: .azCode,
 
 		inet_ip: (.public_ip//false),
 		corp_ip: (.private_ip//false),
@@ -474,7 +475,14 @@ instances_lookup(){
 	local INSTANCE="$1" FILTER="${2:-.id}" STAGE="$NPC_STAGE/${INSTANCES_LOOKUP_KEY:-instances}.lookup"
 	( exec 100>$STAGE.lock && flock 100
 		[ ! -f $STAGE ] && {
-			load_instances '{id: .uuid,name: .name}' >$STAGE || rm -f $STAGE
+			load_instances '{
+				id: .uuid,
+				name: .name,
+				lan_ip: .vnet_ip,
+				zone: .azCode,
+				inet_ip: (.public_ip//false),
+				corp_ip: (.private_ip//false)
+			}' >$STAGE || rm -f $STAGE
 		}
 	)
  	[ ! -z "$INSTANCE" ] && [ -f $STAGE ] && INSTANCE="$INSTANCE" \

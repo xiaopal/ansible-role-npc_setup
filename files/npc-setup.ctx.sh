@@ -157,10 +157,11 @@ apply_actions(){
 	local ACTION="$1" INPUT="$2" RESULT="$3" FORK=0 && [ -f $INPUT ] || return 0
 	touch $RESULT && (  
 		for FORK in $(seq 1 ${NPC_ACTION_FORKS:-1}); do
-			[ ! -z "$FORK" ] && rm -f $RESULT.$FORK || continue
+			[ ! -z "$FORK" ] && rm -f $RESULT.$FORK $RESULT.$FORK.* || continue
 			while [ ! -f $RESULT.error ]; do
 				flock 91 && read -r ACTION_ITEM <&90 && flock -u 91 || break
 				$ACTION "$ACTION_ITEM" "$RESULT.$FORK" "$SECONDS $RESULT" && {
+					[ -f "$RESULT.$FORK.skip" ] && continue
 					[ -f "$RESULT.$FORK" ] || echo "$ACTION_ITEM" >"$RESULT.$FORK"
 					flock 91 && jq -ce '.' $RESULT.$FORK >>$RESULT && flock -u 91 && continue
 				}

@@ -2,7 +2,7 @@
 
 setup_resources "load_balancings"
 setup_resources "load_balancing_target_groups"
-#setup_resources "load_balancing_listeners"
+setup_resources "load_balancing_listeners"
 JQ_LOAD_BALANCINGS='.npc_load_balancings[]?'
 JQ_LOAD_BALANCING_TARGET_GROUPS='.npc_load_balancing_target_groups[]?, ('"$JQ_LOAD_BALANCINGS"'|select(.present != false) | . as $load_balancing | .target_groups[]? | .target_group |= "\(.)@\($load_balancing.name)")'
 JQ_LOAD_BALANCING_LISTENERS='.npc_load_balancing_listeners[]?, ('"$JQ_LOAD_BALANCINGS"'|select(.present != false) | . as $load_balancing | .listeners[]? | .listener |= "\(.)@\($load_balancing.name)")'
@@ -25,7 +25,38 @@ load_balancings_lookup(){
  		&& return 0
  	echo "[ERROR] Load balancing '$LOAD_BALANCING' not found" >&2
  	return 1
- }
+}
+
+
+load_balancing_target_groups_lookup(){
+	local TARGET_GROUP="$1" LOAD_BALANCING="$(load_balancings_lookup "$2")" FILTER="${3:-.TargetGroupId}" && [ ! -z "$LOAD_BALANCING" ] || return 1
+	local STAGE="$NPC_STAGE/load_balancing_target_groups.$LOAD_BALANCING.lookup"
+ 	( exec 100>$STAGE.lock && flock 100
+ 		[ ! -f $STAGE ] && {
+			checked_api2 ".TargetGroups//[]" \
+				GET "/nlb?Action=GetLoadBalancer&InstanceId=$LOAD_BALANCING&Version=2017-12-05" >$STAGE || rm -f $STAGE
+ 		}
+ 	)
+ 	[ ! -z "$TARGET_GROUP" ] && [ -f $STAGE ] && TARGET_GROUP="$TARGET_GROUP" \
+ 		jq_check --stdout '.[]|select(.TargetGroupId == env.TARGET_GROUP or .Name == env.TARGET_GROUP)|'"$FILTER" $STAGE \
+ 			&& return 0
+ 	echo "[ERROR] Load balancing target_group '$TARGET_GROUP' not found" >&2
+ 	return 1
+}
+
+load_balancing_certificates_lookup(){
+	local CERTIFICATE="$1" FILTER="${2:-.Id}" STAGE="$NPC_STAGE/certificates.lookup"
+ 	( exec 100>$STAGE.lock && flock 100
+ 		[ ! -f $STAGE ] && {
+ 			checked_api2 'arrays' GET '/nlb?Action=GetCertificates&Version=2017-12-05' >$STAGE || rm -f $STAGE
+ 		}
+ 	)
+ 	[ ! -z "$CERTIFICATE" ] && [ -f $STAGE ] && CERTIFICATE="$CERTIFICATE" \
+ 		jq_check --stdout '.[]|select(.Id == env.CERTIFICATE or .Name == env.CERTIFICATE)|'"$FILTER" $STAGE \
+ 		&& return 0
+ 	echo "[ERROR] Certificate '$CERTIFICATE' not found" >&2
+ 	return 1
+}
 
 init_load_balancings(){
 	local INPUT="$1" STAGE="$2"
@@ -94,7 +125,7 @@ load_balancings_destroy(){
 
 init_load_balancing_target_groups(){
 	local INPUT="$1" STAGE="$2" LOAD_BALANCING LOAD_BALANCING_ID
-	local JQ_TARGETS_MAPPER='map(if strings//false then capture("(?<instance>[\\w\\-]+)(?:[\\:/](?<port>\\d+))?(?:[\\:/](?<weight>\\d+))?")|with_entries(select(.value)) else . end
+	local JQ_TARGETS_MAPPER='map(if strings//false then capture("(?<instance>[\\w\\-]+)(?:[\\:/,](?<port>\\d+))?(?:[\\:/,](?<weight>\\d+))?")|with_entries(select(.value)) else . end
 		| if .instance then . else error("target_group .instance required") end
 		| if .port then .port |= tonumber else error("target_group .port required") end
 		| if .weight then .weight |= tonumber else . end
@@ -242,3 +273,167 @@ load_balancing_target_groups_destroy(){
     }
 	return 1
 }
+
+init_load_balancing_listeners(){
+	local INPUT="$1" STAGE="$2" LOAD_BALANCING LOAD_BALANCING_ID
+	local JQ_RULES_MAPPER='map(. + { 
+		host: (.host//"*"), 
+		path: (.path//"/")
+		})'
+	jq_check "$JQ_LOAD_BALANCING_LISTENERS" $INPUT || return 0
+    (jq -c "[ $JQ_LOAD_BALANCING_LISTENERS ]" $INPUT || >>$STAGE.error) | EXPAND_KEY_ATTR='listener' \
+		expand_resources 'map(select(.listener)
+			| . + (.listener | capture("(?<listener_name>[\\w\\-]+)(?:[\\:/,](?<port>\\d+))?(?:[\\:/,](?<protocol>\\w+))?(?:@(?<load_balancing>[\\w\\-]+))?")|with_entries(select(.value)))
+			| select((.listener_name and .load_balancing)//error("listener .listener_name and .load_balancing required"))
+			| if .port then .port |= tonumber else error("listener .port required") end
+			| if .protocol then .protocol |= ascii_downcase else error("listener .protocol required") end
+			| if .rules then .rules |= '"$JQ_RULES_MAPPER"' else . end
+			| if .present_rules then .present_rules |= '"$JQ_RULES_MAPPER"' else . end
+			| if .absent_rules then .absent_rules |= '"$JQ_RULES_MAPPER"' else . end
+			)' >$STAGE.expand
+	>$STAGE.init0;  >$STAGE.init1; 	
+    jq -r 'map(.load_balancing//empty)|unique[]' $STAGE.expand | while read -r LOAD_BALANCING _; do  LOAD_BALANCING="$LOAD_BALANCING" \
+		load_balancings_lookup "$LOAD_BALANCING" '"\(env.LOAD_BALANCING) \(.InstanceId)"' || echo "$LOAD_BALANCING"
+    done | sort -u | while read -r LOAD_BALANCING LOAD_BALANCING_ID; do
+        [ ! -z "$LOAD_BALANCING_ID" ] || { LOAD_BALANCING="$LOAD_BALANCING" \
+            jq_check '.[]|select(.load_balancing == env.LOAD_BALANCING and .present != false)' $STAGE.expand || continue
+            >>$STAGE.error; break
+        }
+        ( export LOAD_BALANCING LOAD_BALANCING_ID
+            local LOAD_FILTER='{
+                id: .ListenerId,
+                listener_name: .Name,
+				protocol: .Protocol,
+				port: .ListenPort,
+				actual_balance: .Balance,
+				actual_rules: (.Clusters | map({
+					host: .ServerName,
+					path: .Path,
+					cert_id: .CertId,
+					target_group_id: .TargetGroupId
+				}|with_entries(select(.value))))
+            }' LISTENER_FILTER='.+{
+                name: "\(.listener_name)/\(.port)/\(.protocol)/@\(env.LOAD_BALANCING_ID)",
+                load_balancing_id: env.LOAD_BALANCING_ID
+            }'
+            jq -c "map(select(.load_balancing == env.LOAD_BALANCING)|$LISTENER_FILTER)" $STAGE.expand >>$STAGE.init0 || exit 1
+			checked_api2 ".Listeners//empty|map($LOAD_FILTER|$LISTENER_FILTER)" \
+				GET "/nlb?Action=GetLoadBalancer&InstanceId=$LOAD_BALANCING_ID&Version=2017-12-05" >>$STAGE.init1
+        ) || { >>$STAGE.error; break; }
+    done
+
+	jq_remove_rules(){
+		echo "($2) as \$remove_rules | $1"' | map(select(
+			. as $actual_rule | $remove_rules | 
+			all($actual_rule.host == .host and $actual_rule.path == .path | not) ))'
+	}
+    [ ! -f $STAGE.error ] && plan_resources "$STAGE" \
+        <(jq -sc 'flatten' $STAGE.init0) <(jq -sc 'flatten' $STAGE.init1) \
+			' . + (if (.create or .update) and (.rules | not) and (.present_rules or .absent_rules) then
+					{ rules: ( 
+						('"$(jq_remove_rules '.actual_rules//[]' '(.absent_rules//[]) + (.present_rules//[])')"')
+						+ (.present_rules//[])) }
+				else {} end)
+			| .update = (.update and .rules)' || return 1
+	return 0
+}
+
+load_balancing_listeners_prepare(){
+	local LISTENER="$1"
+	jq -ce 'select(.prepared)'<<<"$LISTENER" && return 0
+
+	local RULES='[]' LOAD_BALANCING_ID="$(jq -r .load_balancing_id<<<"$LISTENER")" RULE TARGET_GROUP_ID CERT_ID RULE_EXTRAS='{}'
+	while read -r RULE; do
+		jq_check '.target_group_id'<<<"$RULE" || {
+			TARGET_GROUP_ID="$(load_balancing_target_groups_lookup "$(jq -r '.target_group'<<<"$RULE")" "$LOAD_BALANCING_ID")" && \
+				[ ! -z "$TARGET_GROUP_ID" ] || return 1
+			RULE_EXTRAS="$(export TARGET_GROUP_ID;jq '.target_group_id = env.TARGET_GROUP_ID' <<<"$RULE_EXTRAS")"
+		}
+		jq_check '(.cert|not) or .cert_id'<<<"$RULE" || {
+			CERT_ID="$(load_balancing_certificates_lookup "$(jq -r '.cert'<<<"$RULE")")" && [ ! -z "$CERT_ID" ] || return 1
+			RULE_EXTRAS="$(export CERT_ID;jq '.cert_id = env.CERT_ID' <<<"$RULE_EXTRAS")"
+		}
+		RULES="$(jq --argjson rule "$RULE" --argjson extras "$RULE_EXTRAS" -c '. + [$rule + $extras]'<<<"$RULES")"
+	done < <(jq -c '.rules//.actual_rules|.[]'<<<"$LISTENER")
+
+	jq_remove_rules2(){
+		echo "($2) as \$remove_rules | $1"' | map(select(
+			. as $actual_rule | $remove_rules | 
+			all( $actual_rule.host == .host and 
+				$actual_rule.path == .path and 
+				$actual_rule.cert_id == .cert_id and 
+				$actual_rule.target_group_id == .target_group_id | not) ))'
+	}
+	
+	jq -c --argjson rules "$RULES" '. + {
+		prepared: true,
+		rules: $rules
+	} | .update = (.update and (
+		(.rules|length) == (.actual_rules|length) and
+		(('"$(jq_remove_rules2 '.actual_rules' '.rules')"') + .rules|sort) == (.rules|sort) 
+		| not ))' <<<"$LISTENER"
+}
+
+load_balancing_listeners_create(){
+	local LISTENER="$(load_balancing_listeners_prepare "$1")" RESULT="$2" CTX="$3" && [ ! -z "$LISTENER" ] || return 1
+	local CREATE_LISTENER="$(jq -c '{
+			Name: .listener_name,
+			InstanceId: .load_balancing_id,
+			ListenPort: .port,
+			Protocol: .protocol,
+			Balance: (.balance//"roundrobin"),
+			Clusters: (.rules | map({
+				ServerName: .host,
+				Path: .path,
+				CertId: .cert_id,
+				TargetGroupId: .target_group_id
+			} | with_entries(select(.value))))
+		}'<<<"$LISTENER")"
+	NPC_API_SUCCEED_NO_RESPONSE='Y' \
+	NPC_API_LOCK="$NPC_STAGE/load_balancing_listeners.create_lock" \
+	checked_api2 POST "/nlb?Action=CreateLBListener&Version=2017-12-05" "$CREATE_LISTENER" && {
+		echo "[INFO] load balancing listener '$(jq -r .name<<<"$LISTENER")' created." >&2
+		return 0
+	}
+	echo "[ERROR] Failed to create load balancing listener: $CREATE_LISTENER" >&2
+	return 1
+}
+
+load_balancing_listeners_update(){
+	local LISTENER="$(load_balancing_listeners_prepare "$1")" RESULT="$2" CTX="$3" && [ ! -z "$LISTENER" ] || return 1
+	jq_check '.update'<<<"$LISTENER" || {
+		touch "$RESULT.skip"
+		return 0
+	}
+	local UPDATE_LISTENER="$(jq -c '{
+			ListenerId: .id,
+			InstanceId: .load_balancing_id,
+			Balance: (.balance//.actual_balance),
+			Clusters: (.rules | map({
+				ServerName: .host,
+				Path: .path,
+				CertId: .cert_id,
+				TargetGroupId: .target_group_id
+			} | with_entries(select(.value))))
+		}'<<<"$LISTENER")"
+	NPC_API_SUCCEED_NO_RESPONSE='Y' \
+	NPC_API_LOCK="$NPC_STAGE/load_balancing_listeners.update_lock" \
+	checked_api2 POST "/nlb?Action=UpdateLBListener&Version=2017-12-05" "$UPDATE_LISTENER" && {
+		echo "[INFO] load balancing listener '$(jq -r .name<<<"$LISTENER")' updated." >&2
+		return 0
+	}
+	echo "[ERROR] Failed to update load balancing listener: $UPDATE_LISTENER" >&2
+	return 1
+}
+
+load_balancing_listeners_destroy(){
+	local LISTENER="$1" RESULT="$2" CTX="$3" && [ ! -z "$LISTENER" ] || return 1
+	local DELETE_ID="$(jq -r .id<<<"$LISTENER")" && [ ! -z "$DELETE_ID" ] || return 1
+	NPC_API_SUCCEED_NO_RESPONSE='Y' \
+    checked_api2 GET "/nlb?Action=DeleteLBListener&InstanceId=$(jq -r .load_balancing_id<<<"$LISTENER")&ListenerId=$DELETE_ID&Version=2017-12-05" && {
+		echo "[INFO] load balancing listener '$(jq -r .name<<<"$LISTENER")' deleted." >&2
+        return 0
+    }
+	return 1
+}
+

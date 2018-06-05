@@ -395,6 +395,23 @@ npc_load_balancings:
           - test-vm/4444
         present_targets:
           - test-vm/8888
+    listeners:
+      - listener: test-http/80/http
+        rules:
+          - path: /
+            target_group: test-target-1
+      - listener: test-https/443/https
+        present_rules:
+          - host: www.example.com
+            path: /new
+            cert: www-example-com
+            target_group: test-target-2
+        absent_rules:
+          - host: www.example.com
+            path: /old
+            cert: www-example-com
+            target_group: test-target-3
+
 EOF
 
 ```

@@ -268,8 +268,6 @@ EOF
           vpc_security_group: default
           vpc_inet: yes
           vpc_inet_capacity: 10m
-          dns_zone: example.com
-          reverse_dns_zone: in-addr.arpa
           ssh_keys:
             - Xiaohui-GRAYPC
           present: yes

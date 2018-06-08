@@ -193,19 +193,11 @@ instances_prepare(){
 			}')"
 	}
 
-	local DNS_ZONE="$(jq -r '.dns_zone//empty'<<<"$INSTANCE")" DNS_ZONE_CONFIG='{}' && [ ! -z "$DNS_ZONE" ] && {
-		DNS_ZONE_CONFIG="$(dns_zones_lookup "$DNS_ZONE" "{dns_zone_id: .HostedZoneId}")" && [ ! -z "$DNS_ZONE_CONFIG" ] || return 1
-	}
-
-	local REVERSE_ZONE="$(jq -r '.reverse_dns_zone//empty'<<<"$INSTANCE")" REVERSE_ZONE_CONFIG='{}' && [ ! -z "$REVERSE_ZONE" ] && {
-		REVERSE_ZONE_CONFIG="$(dns_zones_lookup "$REVERSE_ZONE" "{reverse_dns_zone_id: .HostedZoneId}")" && [ ! -z "$REVERSE_ZONE_CONFIG" ] || return 1
-	}
-
 	IMAGE_ID="$IMAGE_ID" \
 	jq -c '. + {
 		prepared: true,
 		instance_image_id: env.IMAGE_ID
-	}'" +$INSTANCE_TYPE_CONFIG +$PLAN_VOLUMES_CONFIG +$WAN_CONFIG +$VPC_CONFIG +$SSH_KEYS_CONFIG +$DNS_ZONE_CONFIG +$REVERSE_ZONE_CONFIG"<<<"$INSTANCE" && return 0 || return 1
+	}'" +$INSTANCE_TYPE_CONFIG +$PLAN_VOLUMES_CONFIG +$WAN_CONFIG +$VPC_CONFIG +$SSH_KEYS_CONFIG"<<<"$INSTANCE" && return 0 || return 1
 }
 
 instances_wait_instance(){
@@ -333,8 +325,6 @@ api2_create_instance(){
 				else false end),
 			NetworkChargeType: (if .vpc_network and .vpc_inet then "TRAFFIC" else false end),
 			AssociatePrivateIdcIpAddress: (if .vpc_network and .vpc_corp then true else false end),
-			DnsZoneId: .dns_zone_id,
-			ReverseZoneId: .reverse_dns_zone_id, 
 			Personality: (.user_data//{} | to_entries | map({ 
 				Path: .key, 
 				Contents: .value 

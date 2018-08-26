@@ -78,17 +78,16 @@ volumes_create(){
 volumes_update(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
 	local VOLUME_ID="$(jq -r .id<<<"$VOLUME")" && [ ! -z "$VOLUME_ID" ] || return 1
-	local SIZE="$(jq -r '.capacity|sub("[Gg]$"; "")|tonumber'<<<"$VOLUME")" MOUNT_INSTANCE_ID MOUNT_VOLUME_UUID 
+	local SIZE="$(jq -r '.capacity|sub("[Gg]$"; "")|tonumber'<<<"$VOLUME")" MOUNT_INSTANCE_ID 
 	jq_check '.available'<<<"$VOLUME" || {
 		MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")"
-		MOUNT_VOLUME_UUID="$(jq -r '.volume_uuid'<<<"$VOLUME")"
-		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
+		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
 	checked_api '{code:status}' '.' PUT "/api/v1/cloud-volumes/$VOLUME_ID/actions/resize?size=$SIZE" >/dev/null \
 		&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	[ ! -z "$MOUNT_INSTANCE_ID" ] && {
-		mount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
+		mount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
 	echo "[INFO] volume '$VOLUME_ID' updated." >&2
@@ -99,9 +98,8 @@ volumes_destroy(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
 	local VOLUME_ID="$(jq -r .id<<<"$VOLUME")" && [ ! -z "$VOLUME_ID" ] || return 1
 	jq_check '.available'<<<"$VOLUME" || {
-		local MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")" \
-			MOUNT_VOLUME_UUID="$(jq -r '.volume_uuid'<<<"$VOLUME")" 
-		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
+		local MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")"
+		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
 	checked_api '{code:status}' '.' DELETE "/api/v1/cloud-volumes/$VOLUME_ID" >/dev/null && {
@@ -138,16 +136,26 @@ volumes_lookup(){
 	return 1
 }
 
+#mount_instance_volume(){
+#	local INSTANCE_ID="$1" VOLUME_UUID="$2"
+#	checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$VOLUME_UUID"
+#	# TODO: handle {"code":"4000797","msg":"Please retry."}	
+#}
+
+#unmount_instance_volume(){
+#	local INSTANCE_ID="$1" VOLUME_UUID="$2"
+#	checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmount_volume/$VOLUME_UUID"
+#	# TODO: handle {"code":"4000797","msg":"Please retry."}
+#}
+
 mount_instance_volume(){
-	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-	checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$VOLUME_UUID"
-	# TODO: handle {"code":"4000797","msg":"Please retry."}	
+	local INSTANCE_ID="$1" DISK_ID="$2"
+	checked_api2 GET "/nvm?Action=AttachDisk&Version=2017-12-14&InstanceId=$INSTANCE_ID&DiskId=$DISK_ID"
 }
 
 unmount_instance_volume(){
-	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-	checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmount_volume/$VOLUME_UUID"
-	# TODO: handle {"code":"4000797","msg":"Please retry."}
+	local INSTANCE_ID="$1" DISK_ID="$2"
+	checked_api2 GET "/nvm?Action=DetachDisk&Version=2017-12-14&InstanceId=$INSTANCE_ID&DiskId=$DISK_ID"
 }
 
 volumes_mount(){
@@ -155,29 +163,15 @@ volumes_mount(){
 		&& [ ! -z "$INSTANCE_ID" ] && [ ! -z "$VOLUME_NAME" ] || return 1
 	local VOLUME_ID="$(volumes_lookup "$VOLUME_NAME" '.id')" && [ ! -z "$VOLUME_ID" ] || return 1
 	local VOLUME="$(volumes_wait_status "$VOLUME_ID" "$CTX" '.')" && [ ! -z "$VOLUME" ] || return 1
-	local MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")" \
-		MOUNT_VOLUME_UUID="$(jq -r '.volume_uuid'<<<"$VOLUME")"
+	local MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")"
 	jq_check '.available'<<<"$VOLUME" || {
-		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
+		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
-	while true; do
-		local RESPONSE="$(npc api --error PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$MOUNT_VOLUME_UUID")"
-		[ "$(jq -r .code <<<"$RESPONSE")" = "200" ] \
-			&& volumes_wait_status "$VOLUME_ID" "$CTX" && return 0
+	mount_instance_volume "$INSTANCE_ID" "$VOLUME_ID" \
+		&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 
-		echo "[ERROR] ${RESPONSE:-No response}" >&2
-
-		# {"code":"4000720","msg":"instance status error."}
-		# {"code":"4000799","msg":"UNKNOWN error."}
-		local ERROR_CODE="$(jq -r .code <<<"$RESPONSE")"
-		[ ! -z "$WAIT_INSTANCE" ] && (
-			[ "$ERROR_CODE" = "4000720" ] || [ "$ERROR_CODE" = "4000799" ]
-			) && {
-			action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" && continue
-		}
-		return 1
-	done
+	return 0
 }
 
 volumes_unmount(){
@@ -185,8 +179,7 @@ volumes_unmount(){
 	local VOLUME_ID="$(volumes_lookup "$VOLUME_NAME" '.id')" && [ ! -z "$VOLUME_ID" ] || return 1
 	local VOLUME="$(volumes_wait_status "$VOLUME_ID" "$CTX" '.')" && [ ! -z "$VOLUME" ] || return 1
 	INSTANCE_ID="$INSTANCE_ID" jq_check '.instance_id == env.INSTANCE_ID'<<<"$VOLUME" && {
-		local MOUNT_VOLUME_UUID="$(jq -r '.volume_uuid'<<<"$VOLUME")" 
-		unmount_instance_volume "$INSTANCE_ID" "$MOUNT_VOLUME_UUID" \
+		unmount_instance_volume "$INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
 	return 0

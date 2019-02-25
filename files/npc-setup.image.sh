@@ -7,10 +7,10 @@ init_instance_images(){
 	jq_check '.npc_instance_images|arrays' $INPUT && {
 		plan_resources "$STAGE" \
 			<(jq -c '.npc_instance_images//[]' $INPUT || >>$STAGE.error) \
-			<(npc api 'json.images|map({
-				id: .imageId,
-				name: .imageName
-			})' GET "/api/v1/vm/privateimages?pageSize=9999&pageNum=1&keyword=" || >>$STAGE.error) \
+			<(checked_api2 '.Images|map({
+					id: .ImageId,
+					name: .ImageName
+				})' POST '/nvm?Action=DescribeImages&Version=2017-12-14&Limit=9999&Offset=0' '{"Filter":{"ImageType": ["Private"]}}' || >>$STAGE.error) \
 			'. + {update: false}' || return 1
 	}
 	return 0
@@ -23,7 +23,7 @@ lookup_from_instance(){
 	}
 	( exec 100>$STAGE.lock && flock 100
 		[ ! -f $STAGE ] && {
-			load_instances '{id: .uuid,name: .name}' >$STAGE || rm -f $STAGE
+			load_instances '{id: .InstanceId,name: .InstanceName}' >$STAGE || rm -f $STAGE
 		}
 	)
 	[ -f $STAGE ] && INSTANCE_NAME="$INSTANCE_NAME" \
@@ -37,13 +37,13 @@ instance_images_create(){
 	local IMAGE="$1" RESULT="$2" CTX="$3" && [ ! -z "$IMAGE" ] || return 1
 	local FROM_INSTANCE="$(INSTANCES_LOOKUP_KEY='from_instances' instances_lookup "$(jq -r '.from_instance//empty'<<<"$IMAGE")")" \
 		&& [ ! -z "$FROM_INSTANCE" ] || return 1
-	local SAVE_IMAGE="$(FROM_INSTANCE="$FROM_INSTANCE" jq -c '{
-		name: .name,
-		uuid: env.FROM_INSTANCE,
-		description: (.description//"created by npc-setup")
-	}'<<<"$IMAGE")"
+	local IMAGE_ID SAVE_IMAGE_PARAMS="$(FROM_INSTANCE="$FROM_INSTANCE" jq -r '{
+			ImageName: .name,
+			InstanceId: env.FROM_INSTANCE,
+			Description: (.description//"created by npc-setup"|@base64)
+		}|to_entries|map(@uri"\(.key)=\(.value)")|join("&")'<<<"$IMAGE")"
 	instances_wait_instance "$FROM_INSTANCE" "$CTX" \
-		&& local IMAGE_ID="$(checked_api '.imageId' POST "/api/v1/vm/privateimage" "$SAVE_IMAGE")" \
+		&& IMAGE_ID="$(checked_api2 '.ImageId' GET "/nvm?Action=CreateImage&Version=2017-12-14&$SAVE_IMAGE_PARAMS")" \
 		&& [ ! -z "$IMAGE_ID" ] && instances_wait_instance "$FROM_INSTANCE" "$CTX" && {
 			echo "[INFO] instance_image '$IMAGE_ID' saved." >&2
 			return 0
@@ -54,7 +54,7 @@ instance_images_create(){
 instance_images_destroy(){
 	local IMAGE="$1" RESULT="$2" CTX="$3" && [ ! -z "$IMAGE" ] || return 1
 	local IMAGE_ID="$(jq -r .id<<<"$IMAGE")" && [ ! -z "$IMAGE_ID" ] || return 1
-	checked_api DELETE "/api/v1/vm/privateimage/$IMAGE_ID" && {
+	checked_api2 GET "/nvm?Action=DeleteImage&Version=2017-12-14&ImageId=$IMAGE_ID" && {
 		echo "[INFO] instance_image '$IMAGE_ID' destroyed." >&2
 		return 0
 	}

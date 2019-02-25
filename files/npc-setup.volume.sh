@@ -3,21 +3,29 @@
 setup_resources "volumes"
 
 FILTER_LOAD_VOLUME='{
-		name: .name,
-		id: .id,
-		actual_capacity: "\(.size)G",
-		available: (.status != "mount_succ"),
-		volume_uuid: .volume_uuid,
-		instance_id: (if .status == "mount_succ" then .service_name else null end)
+		name: .DiskName,
+		id: .DiskId,
+		actual_type: .Type,
+		actual_capacity: "\(.Capacity)G",
+		available: (.Status != "mount_succ"),
+		volume_uuid: .VolumeUUID,
+		instance_id: (if .Status == "mount_succ" then .AttachedInstance else null end)
 	}'
+VOLUME_TYPE_ALIASES='{
+  "SSD": "CloudSsd",
+  "SAS": "CloudSas",
+  "C_SSD": "CloudSsd",
+  "C_SAS": "CloudSas",
+  "NBS_SSD": "CloudHighPerformanceSsd"
+}'
 
 load_volumes(){
-	local LIMIT=20 OFFSET=0
+	local LIMIT=50 OFFSET=0
 	while (( LIMIT > 0 )); do
-		local PARAMS="limit=$LIMIT&offset=$OFFSET" && LIMIT=0
+		local PARAMS="Limit=$LIMIT&Offset=$OFFSET" && LIMIT=0
 		while read -r VOLUME_ENTRY; do
-			LIMIT=20 && jq -c "select(.)|$FILTER_LOAD_VOLUME"<<<"$VOLUME_ENTRY"
-		done < <(npc api 'json.volumes[]' GET "/api/v1/cloud-volumes?$PARAMS") 
+			LIMIT=50 && jq -c "select(.)|$FILTER_LOAD_VOLUME"<<<"$VOLUME_ENTRY"
+		done < <(npc api2 'json.DiskCxts[]' POST "/ncv?Action=ListDisk&Version=2017-12-28&$PARAMS" '{}')
 		(( OFFSET += LIMIT ))
 	done | jq -sc '.'
 }
@@ -38,60 +46,29 @@ init_volumes(){
 	return 0
 }
 
-api_create_volume(){
-	local CREATE_VOLUME="$1"
-	(
-		exec 100>$NPC_STAGE/volumes.create_lock && flock 100
-		local RESPONSE="$(checked_api . POST "/api/v1/cloud-volumes" "$CREATE_VOLUME")" \
-			&& echo "$RESPONSE" \
-			&& [ ! -z "$RESPONSE" ]  \
-			&& local VOLUME_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" \
-			&& [ ! -z "$VOLUME_ID" ] \
-			&& sleep 0.2s || echo "[ERROR] ${RESPONSE:-No response}" >&2
-	)
-}
-
 volumes_create(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
-	local CREATE_VOLUME="$(jq -c '{
-		volume_name: .name,
-		az_name: (.zone//.az),
-		type: .type,
-		format:(.format//"Raw"),
-		size: (.capacity|sub("[Gg]$"; "")|tonumber)
-	}|with_entries(select(.value))'<<<"$VOLUME")"
-	while true; do
-		local RESPONSE="$(api_create_volume "$CREATE_VOLUME")" && [ ! -z "$RESPONSE" ] \
-			&& local VOLUME_ID="$(jq -r '.id//empty' <<<"$RESPONSE")" && [ ! -z "$VOLUME_ID" ] \
-			&& volumes_wait_status "$VOLUME_ID" "$CTX" && {
-				echo "[INFO] volume '$VOLUME_ID' created." >&2
-				return 0
-			}
-		# {"code":4030001,"msg":"Api freq out of limit."}
-		[ "$(jq -r .code <<<"$RESPONSE")" = "4030001" ] && (
-			exec 100>$NPC_STAGE/volumes.retries && flock 100 \
-				&& action_sleep "$NPC_ACTION_RETRY_SECONDS" "$CTX" ) && continue
-		return 1
-	done
+	local VOLUME_ID && VOLUME_ID="$(NPC_API_LOCK="$NPC_STAGE/volumes.create_lock" \
+		checked_api2 '.DiskIds[0]//empty' \
+		GET "/ncv?Action=CreateDisk&Version=2017-12-28&$(jq -r --argjson aliases "$VOLUME_TYPE_ALIASES" '{
+			Scope: (.scope//"NVM"),
+			PricingModel: "PostPaid",
+			ZoneId: (.zone//.az),
+			Name: .name,
+			Type: (if .type then $aliases[.type|ascii_upcase]//.type else "CloudSsd" end),
+			Capacity: (.capacity|sub("[Gg]$"; "")|tonumber)
+		}|to_entries|map(@uri"\(.key)=\(.value)")|join("&")'<<<"$VOLUME")")" && [ ! -z "$VOLUME_ID" ] && {
+			echo "[INFO] volume '$VOLUME_ID' created." >&2
+			return 0
+		}
+	return 1
 }
 
 volumes_update(){
 	local VOLUME="$1" RESULT="$2" CTX="$3" && [ ! -z "$VOLUME" ] || return 1
-	local VOLUME_ID="$(jq -r .id<<<"$VOLUME")" && [ ! -z "$VOLUME_ID" ] || return 1
-	local SIZE="$(jq -r '.capacity|sub("[Gg]$"; "")|tonumber'<<<"$VOLUME")" MOUNT_INSTANCE_ID 
-	jq_check '.available'<<<"$VOLUME" || {
-		MOUNT_INSTANCE_ID="$(jq -r '.instance_id'<<<"$VOLUME")"
-		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
-			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
-	}
-	checked_api '{code:status}' '.' PUT "/api/v1/cloud-volumes/$VOLUME_ID/actions/resize?size=$SIZE" >/dev/null \
-		&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
-	[ ! -z "$MOUNT_INSTANCE_ID" ] && {
-		mount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
-			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
-	}
-	echo "[INFO] volume '$VOLUME_ID' updated." >&2
-	return 0
+	# resize 已废弃 @ 2019-02-25
+	echo "[ERROR] volume resize deprecated." >&2
+	return 1
 }
 
 volumes_destroy(){
@@ -102,7 +79,7 @@ volumes_destroy(){
 		unmount_instance_volume "$MOUNT_INSTANCE_ID" "$VOLUME_ID" \
 			&& volumes_wait_status "$VOLUME_ID" "$CTX" || return 1
 	}
-	checked_api '{code:status}' '.' DELETE "/api/v1/cloud-volumes/$VOLUME_ID" >/dev/null && {
+	checked_api2 GET "/ncv?Action=DeleteDisk&Version=2017-12-28&DiskId=$VOLUME_ID" && {
 		echo "[INFO] volume '$VOLUME_ID' destroyed." >&2
 		return 0
 	}
@@ -112,10 +89,11 @@ volumes_destroy(){
 volumes_wait_status(){
 	local VOLUME_ID="$1" CTX="$2" FILTER="$3" && [ ! -z "$VOLUME_ID" ] || return 1
 	while action_check_continue "$CTX"; do
+		local API2_DESCRIBE=(GET "/ncv?Action=DescribeDisk&Version=2017-12-28&DiskId=$VOLUME_ID")
 		if [ ! -z "$FILTER" ]; then
-			OPTION_SILENCE=Y checked_api 'if .status|endswith("ing")|not then ('"$FILTER_LOAD_VOLUME|$FILTER"') else empty end' GET "/api/v1/cloud-volumes/$VOLUME_ID" && return 0
+			OPTION_SILENCE=Y checked_api2 '.DiskCxt|if .Status|endswith("ing")|not then ('"$FILTER_LOAD_VOLUME|$FILTER"') else empty end' "${API2_DESCRIBE[@]}" && return 0
 		else
-			OPTION_SILENCE=Y checked_api '.status|endswith("ing")|not' GET "/api/v1/cloud-volumes/$VOLUME_ID" >/dev/null && return 0
+			OPTION_SILENCE=Y checked_api2 '.DiskCxt|.Status|endswith("ing")|not' "${API2_DESCRIBE[@]}" >/dev/null && return 0
 		fi
 		sleep "$NPC_ACTION_PULL_SECONDS"
 	done
@@ -135,18 +113,6 @@ volumes_lookup(){
 	echo "[ERROR] volume '$VOLUME_NAME' not found" >&2
 	return 1
 }
-
-#mount_instance_volume(){
-#	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-#	checked_api PUT "/api/v1/vm/$INSTANCE_ID/action/mount_volume/$VOLUME_UUID"
-#	# TODO: handle {"code":"4000797","msg":"Please retry."}	
-#}
-
-#unmount_instance_volume(){
-#	local INSTANCE_ID="$1" VOLUME_UUID="$2"
-#	checked_api DELETE "/api/v1/vm/$INSTANCE_ID/action/unmount_volume/$VOLUME_UUID"
-#	# TODO: handle {"code":"4000797","msg":"Please retry."}
-#}
 
 mount_instance_volume(){
 	local INSTANCE_ID="$1" DISK_ID="$2"

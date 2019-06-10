@@ -9,7 +9,7 @@ MAPPER_PRE_LOAD_INSTANCE='{
         lan_ip: (.PrivateIpAddresses[0]),
         zone: (.Placement.ZoneId),
 
-        inet_ip: (.PublicIpAddresses[0]//false),
+        inet_ip: (.PublicIpAddresses[0]//.EipAddress//false),
         corp_ip: (.PrivateIdcIpAddresses[0]//false),
         
         actual_volumes: (.InstanceId as $uuid |.AttachVolumes//[]|map({
@@ -24,7 +24,7 @@ MAPPER_PRE_LOAD_INSTANCE='{
             }
         })|from_entries),
 
-        actual_wan_ip: (.PublicIpAddresses[0]//false),
+        actual_wan_ip: (.PublicIpAddresses[0]//.EipAddress//false),
 # v2 api 不支持的特性
 #       actual_wan_id: (.public_port_id//false),
         actual_wan_capacity: (if .InternetMaxBandwidth then "\(.InternetMaxBandwidth|tonumber)M" else false end),
@@ -394,7 +394,7 @@ instances_lookup(){
                 name: .InstanceName,
                 lan_ip: (.PrivateIpAddresses[0]),
                 zone: (.Placement.ZoneId),
-                inet_ip: (.PublicIpAddresses[0]//false),
+                inet_ip: (.PublicIpAddresses[0]//.EipAddress//false),
                 corp_ip: (.PrivateIdcIpAddresses[0]//false)
             }' >$STAGE || rm -f $STAGE
         }

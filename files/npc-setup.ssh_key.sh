@@ -25,7 +25,7 @@ check_ssh_keys(){
     while read -r SSH_KEY; do
         ( exec 100>$STAGE.lock && flock 100
             [ -f $STAGE ] || {
-                checked_api2 '.Results//empty|map({key:.KeyName, value:{
+                checked_api2 '.Results|map({key:.KeyName, value:{
                     id: .Id,
                     name: .KeyName,
                     fingerprint: .Fingerprint

@@ -2,6 +2,6 @@
 - hosts: localhost
   gather_facts: no
   roles: 
-    - ../ansible-role-npc_setup
+    - xiaopal.npc_setup
   tasks:
     - debug: msg=done

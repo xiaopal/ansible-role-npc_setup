@@ -212,6 +212,7 @@ instances_create(){
         return 1
     }
     while true; do
+        echo "[DEBUG] instance $INSTANCE"
         local RESPONSE="$(api2_create_instance "$INSTANCE" "$CTX")" && [ ! -z "$RESPONSE" ] || return 1
         local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
             && instances_wait_instance "$INSTANCE_ID" "$CTX" \

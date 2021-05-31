@@ -260,7 +260,7 @@ api2_create_instance(){
     done < <(jq -c '.plan_volumes[]|select(.present)'<<<"$INSTANCE")
     
     local CREATE_INSTANCE="$(jq -c '{
-            PayType: "PostPaid",
+            PayType: (if .pay_type then .pay_type else "PostPaid" end),
             InstanceName: .name,
             ImageId: .instance_image_id,
             SpecType: .instance_type.spec,

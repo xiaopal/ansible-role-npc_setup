@@ -207,6 +207,8 @@ checked_api(){
         FILTER="$1" && shift
     done; ARGS=("${ARGS[@]}" "$@")
 
+    echo "[DEBUG] ARGS: $ARGS"
+
     local DO_API=(npc ${NPC_API:-api})
     [ ! -z "$NPC_API_LOCK" ] && DO_API=('flock' "$NPC_API_LOCK" "${DO_API[@]}")
     [ ! -z "$NPC_API_SUCCEED_NO_RESPONSE" ] || ARGS=(--error "${ARGS[@]}")

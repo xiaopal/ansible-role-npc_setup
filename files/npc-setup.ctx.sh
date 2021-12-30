@@ -214,6 +214,7 @@ checked_api(){
         [ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] ${RESPONSE:-No response}" >&2
         return 1
     }
+
     [ ! -z "$NPC_API_SUCCEED_NO_RESPONSE" ] && [ -z "$RESPONSE" ] && RESPONSE='{"ok":"no response"}'
     [ ! -z "$RESPONSE" ] || {
         [ ! -z "$OPTION_SILENCE" ] || echo "[ERROR] ${RESPONSE:-No response}" >&2

@@ -212,6 +212,7 @@ instances_create(){
         return 1
     }
     while true; do
+        echo "[DEBUG] instance $INSTANCE"
         local RESPONSE="$(api2_create_instance "$INSTANCE" "$CTX")" && [ ! -z "$RESPONSE" ] || return 1
         local INSTANCE_ID="$(jq -r '.id//empty'<<<"$RESPONSE")" && [ ! -z "$INSTANCE_ID" ] \
             && instances_wait_instance "$INSTANCE_ID" "$CTX" \
@@ -259,7 +260,7 @@ api2_create_instance(){
     done < <(jq -c '.plan_volumes[]|select(.present)'<<<"$INSTANCE")
     
     local CREATE_INSTANCE="$(jq -c '{
-            PayType: "PostPaid",
+            PayType: (if .pay_type then .pay_type else "PostPaid" end),
             InstanceName: .name,
             ImageId: .instance_image_id,
             SpecType: .instance_type.spec,

@@ -31,6 +31,7 @@ check_ssh_keys(){
                     fingerprint: .Fingerprint
                 }})|from_entries' \
                 GET '/keypair?Action=ListKeyPair&Version=2018-02-08&Limit=9999&Offset=0' >$STAGE || {
+                    cat $STAGE
                     rm -f $STAGE; exit 1
                 }
             }
